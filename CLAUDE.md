@@ -8,7 +8,29 @@ A simple server dashboard web app that shows the status of the "services" runnin
 
 ## Toolchain
 
-This is a NixOS machine and Go/Node are not installed globally. Run every command inside the dev shell: either `nix-shell` from the repo root, or `nix-shell ../shell.nix --run '<cmd>'` from a subdirectory. Use `shell.nix`, not a flake: a flake in a non-git directory copies the whole tree, including `node_modules`, into the store.
+This is a NixOS machine and Go/Node are not installed globally. Run every command inside the dev shell: `nix develop` (or `nix-shell`) from the repo root, or `nix-shell ../shell.nix --run '<cmd>'` from a subdirectory. The flake's devShell reuses `shell.nix`.
+
+## Nix packaging
+
+- `flake.nix` exports:
+  - `packages.<system>.default`
+  - `overlays.default`
+  - `nixosModules.default`, which provides `services.dashiboardie.*`
+  - `checks`: the package plus a NixOS VM test (`nix/test.nix`)
+- **Package** (`nix/package.nix`):
+  - The frontend is built with `buildNpmPackage` and the backend with `buildGoModule` (`vendorHash = null`, because there are no Go dependencies).
+  - The binary is wrapped with `-static <frontend>`.
+  - After `frontend/package-lock.json` changes, update `npmDepsHash`: set it to `lib.fakeHash`, build, and copy the hash from the error.
+- **Module** (`nix/module.nix`):
+  - The service runs as root, which is needed for system unit actions, rootful podman and incus.
+  - Each provider is enabled by putting its CLI on the unit's `path`. Podman and incus default to `virtualisation.{podman,incus}.enable`.
+- **Flakes only see git-tracked files:** `git add` new files before `nix build` or `nix flake check`.
+
+```sh
+nix build                                        # package -> ./result
+nix flake check                                  # Go tests + VM test (needs KVM)
+nix build .#checks.x86_64-linux.module -L        # VM test only
+```
 
 ## Commands
 
