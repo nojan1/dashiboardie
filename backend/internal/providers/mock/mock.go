@@ -63,7 +63,7 @@ func (p *Provider) List(ctx context.Context) ([]service.Service, error) {
 	return append([]service.Service(nil), p.svcs...), nil
 }
 
-func (p *Provider) Do(ctx context.Context, id string, action service.Action) error {
+func (p *Provider) Do(ctx context.Context, _ service.Source, id string, action service.Action) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for i := range p.svcs {
@@ -81,7 +81,7 @@ func (p *Provider) Do(ctx context.Context, id string, action service.Action) err
 	return service.ErrNotFound
 }
 
-func (p *Provider) Logs(ctx context.Context, id string, lines int) ([]string, error) {
+func (p *Provider) Logs(ctx context.Context, _ service.Source, id string, lines int) ([]string, error) {
 	now := time.Now()
 	n := min(lines, 20)
 	out := make([]string, n)

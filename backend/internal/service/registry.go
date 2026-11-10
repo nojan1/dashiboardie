@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
+
+// listTimeout bounds each provider so one hung CLI cannot stall the dashboard.
+const listTimeout = 10 * time.Second
 
 // Registry aggregates all providers into a single list.
 type Registry struct {
@@ -43,6 +47,8 @@ func (r *Registry) List(ctx context.Context) ([]Service, []ProviderError) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			ctx, cancel := context.WithTimeout(ctx, listTimeout)
+			defer cancel()
 			svcs, err := p.List(ctx)
 			results <- result{p.Sources()[0], svcs, err}
 		}()
@@ -101,7 +107,7 @@ func (r *Registry) Do(ctx context.Context, src Source, id string, action Action)
 	if err != nil {
 		return err
 	}
-	return p.Do(ctx, id, action)
+	return p.Do(ctx, src, id, action)
 }
 
 func (r *Registry) Logs(ctx context.Context, src Source, id string, lines int) ([]string, error) {
@@ -109,5 +115,5 @@ func (r *Registry) Logs(ctx context.Context, src Source, id string, lines int) (
 	if err != nil {
 		return nil, err
 	}
-	return p.Logs(ctx, id, lines)
+	return p.Logs(ctx, src, id, lines)
 }

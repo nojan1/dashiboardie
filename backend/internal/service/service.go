@@ -60,11 +60,25 @@ type Service struct {
 // Provider is implemented by each service source.
 type Provider interface {
 	// Sources lists the sources this provider reports; actions on services
-	// with any of them are routed back to it.
+	// with any of them are routed back to it. The first one is used to label
+	// List errors.
 	Sources() []Source
 	List(ctx context.Context) ([]Service, error)
-	Do(ctx context.Context, id string, action Action) error
-	Logs(ctx context.Context, id string, lines int) ([]string, error)
+	// Do and Logs must only act on services the provider itself lists: the
+	// API is unauthenticated, so src/id come straight from the client.
+	Do(ctx context.Context, src Source, id string, action Action) error
+	Logs(ctx context.Context, src Source, id string, lines int) ([]string, error)
+}
+
+// Find returns the service with the given source and id, or ErrNotFound.
+// Providers use it to validate client-supplied ids against their own List.
+func Find(svcs []Service, src Source, id string) (Service, error) {
+	for _, s := range svcs {
+		if s.Source == src && s.ID == id {
+			return s, nil
+		}
+	}
+	return Service{}, ErrNotFound
 }
 
 var (
