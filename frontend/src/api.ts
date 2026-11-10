@@ -46,3 +46,21 @@ export const runAction = (s: Service, action: Action) =>
 
 export const fetchLogs = (s: Service, lines = 200) =>
   request<{ lines: string[] }>(`${servicePath(s)}/logs?lines=${lines}`).then((r) => r.lines)
+
+// Mirrors backend/internal/host.
+export interface HostStats {
+  hostname: string
+  cpu: { percent: number | null; cores: number; load: number[] | null }
+  memory: { totalBytes: number; usedBytes: number; swapTotalBytes: number; swapUsedBytes: number }
+  filesystems: {
+    mountpoint: string
+    source: string
+    fsType: string
+    totalBytes: number
+    usedBytes: number
+    availBytes: number
+    error?: string
+  }[]
+}
+
+export const fetchHost = () => request<HostStats>('/api/host')

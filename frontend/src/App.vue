@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { listServices, runAction, type Action, type ProviderError, type Service } from './api'
+import {
+  fetchHost,
+  listServices,
+  runAction,
+  type Action,
+  type HostStats,
+  type ProviderError,
+  type Service,
+} from './api'
+import { formatBytes, formatPercent } from './format'
+import HostSummary from './components/HostSummary.vue'
 import LogsPanel from './components/LogsPanel.vue'
 
 const REFRESH_MS = 10_000
@@ -13,6 +23,9 @@ const sourceFilter = ref('')
 const statusFilter = ref('')
 const busy = ref<Set<string>>(new Set())
 const selected = ref<Service | null>(null)
+const host = ref<HostStats | null>(null)
+const hostError = ref('')
+const loaded = ref(false)
 
 const key = (s: Service) => `${s.source}/${s.id}`
 
@@ -29,7 +42,7 @@ const filtered = computed(() => {
   )
 })
 
-async function refresh() {
+async function refreshServices() {
   try {
     const res = await listServices()
     services.value = res.services
@@ -37,34 +50,34 @@ async function refresh() {
     loadError.value = ''
   } catch (e) {
     loadError.value = (e as Error).message
+  } finally {
+    loaded.value = true
   }
 }
+
+async function refreshHost() {
+  try {
+    host.value = await fetchHost()
+    hostError.value = ''
+  } catch (e) {
+    hostError.value = (e as Error).message
+  }
+}
+
+const refresh = () => Promise.all([refreshServices(), refreshHost()])
 
 async function act(s: Service, action: Action) {
   const k = key(s)
   busy.value.add(k)
   try {
     await runAction(s, action)
-    await refresh()
+    await refreshServices()
   } catch (e) {
     alert(`${action} ${s.name} failed: ${(e as Error).message}`)
   } finally {
     busy.value.delete(k)
   }
 }
-
-function formatBytes(n?: number) {
-  if (n == null) return '—'
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
-  let i = 0
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024
-    i++
-  }
-  return `${n.toFixed(i ? 1 : 0)} ${units[i]}`
-}
-
-const formatCpu = (n?: number) => (n == null ? '—' : `${n.toFixed(1)} %`)
 
 let timer: number | undefined
 onMounted(() => {
@@ -76,7 +89,11 @@ onUnmounted(() => window.clearInterval(timer))
 
 <template>
   <main>
-    <h1>Services</h1>
+    <h1>{{ host?.hostname || 'Server' }}</h1>
+
+    <HostSummary :stats="host" :error="hostError" />
+
+    <h2 class="section">Services</h2>
 
     <div class="toolbar">
       <input v-model="search" type="search" placeholder="Search by name…" />
@@ -113,7 +130,7 @@ onUnmounted(() => window.clearInterval(timer))
             <td><span class="tag">{{ s.source }}</span></td>
             <td>{{ s.name }}</td>
             <td><span class="status" :class="s.status">{{ s.status }}</span></td>
-            <td class="num">{{ formatCpu(s.metrics?.cpuPercent) }}</td>
+            <td class="num">{{ formatPercent(s.metrics?.cpuPercent) }}</td>
             <td class="num">{{ formatBytes(s.metrics?.memoryBytes) }}</td>
             <td class="actions">
               <button :disabled="busy.has(key(s)) || s.status === 'running'" @click="act(s, 'start')">Start</button>
@@ -123,7 +140,7 @@ onUnmounted(() => window.clearInterval(timer))
             </td>
           </tr>
           <tr v-if="!filtered.length">
-            <td colspan="6" class="empty">No services match.</td>
+            <td colspan="6" class="empty">{{ loaded ? 'No services match.' : 'Loading…' }}</td>
           </tr>
         </tbody>
       </table>
@@ -140,6 +157,7 @@ main {
   padding: 1.5rem 1rem;
 }
 h1 { margin: 0 0 1rem; font-size: 1.4rem; }
+.section { margin: 0 0 0.75rem; font-size: 1.1rem; }
 .toolbar {
   display: flex;
   flex-wrap: wrap;

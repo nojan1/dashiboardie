@@ -88,3 +88,11 @@ For UI work, run the backend with `-mock` and `npm run dev` side by side.
   - `GET /api/services/{source}/{id}/logs?lines=N` returns `{lines}`.
 - **No authentication, by design:** access is enforced by the reverse proxy. Don't add auth.
 - **Metrics are optional:** a nil `Metrics` (or a nil field inside it) means the source can't provide them, and the UI shows `—`.
+- **Host resources** (`backend/internal/host`, `GET /api/host`): the overview at the top of the page. It's independent of the providers and shows real data even with `-mock`.
+  - CPU % comes from `/proc/stat`, diffed against the previous request. The first request takes two samples 250ms apart.
+  - Memory used is MemTotal minus MemAvailable.
+  - Filesystems are read from `/proc/self/mountinfo`, filtered to an allowlist of real filesystem types and deduplicated by device, keeping the shortest mountpoint. This collapses `/nix/store` and btrfs subvolumes.
+  - Each `statfs` call has a 2s timeout, so a hung NFS mount can't stall the response.
+  - Disk % uses the same basis as `df`: used / (used + avail).
+  - Because of this, the NixOS module must not use mount-namespacing options such as `ProtectHome` or `PrivateTmp`: they would change what the service sees mounted.
+- **Frontend usage thresholds:** set in `usageLevel` in `frontend/src/format.ts`: 75% is warning and 90% is critical. Meters switch colour at those levels, and `UsageFlag` adds a text label, so the state is never shown by colour alone.

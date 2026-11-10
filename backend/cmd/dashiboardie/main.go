@@ -10,6 +10,7 @@ import (
 
 	"dashiboardie/internal/api"
 	"dashiboardie/internal/execx"
+	"dashiboardie/internal/host"
 	"dashiboardie/internal/providers/incus"
 	"dashiboardie/internal/providers/mock"
 	"dashiboardie/internal/providers/nixos"
@@ -35,7 +36,8 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	api.New(service.NewRegistry(providers...)).Register(mux)
+	// Host stats are always real, even with -mock.
+	api.New(service.NewRegistry(providers...), &host.Reader{}).Register(mux)
 	if *static != "" {
 		mux.Handle("/", http.FileServer(http.Dir(*static)))
 	}

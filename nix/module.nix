@@ -95,8 +95,9 @@ in
         # incus all require it.
         Restart = "on-failure";
         NoNewPrivileges = true;
-        ProtectHome = true;
-        PrivateTmp = true;
+        # No ProtectHome/PrivateTmp: they give the service its own mount
+        # namespace, which would hide or change the filesystems the host
+        # resource overview reports.
       };
     };
   };

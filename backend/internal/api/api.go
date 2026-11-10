@@ -9,20 +9,37 @@ import (
 	"net/http"
 	"strconv"
 
+	"dashiboardie/internal/host"
 	"dashiboardie/internal/service"
 )
 
 type Server struct {
-	reg *service.Registry
+	reg  *service.Registry
+	host *host.Reader
 }
 
-func New(reg *service.Registry) *Server { return &Server{reg: reg} }
+func New(reg *service.Registry, hostReader *host.Reader) *Server {
+	return &Server{reg: reg, host: hostReader}
+}
 
 // Register mounts the API routes on mux.
 func (s *Server) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/host", s.hostStats)
 	mux.HandleFunc("GET /api/services", s.listServices)
 	mux.HandleFunc("POST /api/services/{source}/{id}/{action}", s.doAction)
 	mux.HandleFunc("GET /api/services/{source}/{id}/logs", s.logs)
+}
+
+func (s *Server) hostStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := s.host.Read(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if stats.Filesystems == nil {
+		stats.Filesystems = []host.Filesystem{}
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
 
 type listResponse struct {

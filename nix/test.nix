@@ -44,6 +44,14 @@ pkgs.testers.runNixOSTest {
         assert ids == ["hello.service"], ids
         assert res["services"][0]["status"] == "running", res
 
+    with subtest("reports host resources"):
+        h = json.loads(machine.succeed("curl -sf http://127.0.0.1:8080/api/host"))
+        assert h["cpu"]["cores"] >= 1, h
+        assert h["memory"]["totalBytes"] > 0, h
+        mounts = [fs["mountpoint"] for fs in h["filesystems"]]
+        assert "/" in mounts, mounts
+        assert "/nix/store" not in mounts, mounts  # bind mount of / is deduplicated
+
     with subtest("serves the frontend"):
         machine.succeed("curl -sf http://127.0.0.1:8080/ | grep -q '<title>Dashiboardie</title>'")
 
