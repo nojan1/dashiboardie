@@ -1,0 +1,6 @@
+# Go
+/backend/dashiboardie
+
+# Frontend (frontend/.gitignore covers the rest)
+/frontend/node_modules
+/frontend/dist
