@@ -11,7 +11,7 @@ import {
 } from './api'
 import { formatBytes, formatPercent } from './format'
 import HostSummary from './components/HostSummary.vue'
-import LogsPanel from './components/LogsPanel.vue'
+import LogsModal from './components/LogsModal.vue'
 
 const REFRESH_MS = 10_000
 
@@ -195,7 +195,7 @@ onUnmounted(() => {
       </table>
     </div>
 
-    <LogsPanel v-if="selected" :service="selected" @close="selected = null" />
+    <LogsModal v-if="selected" :service="selected" @close="selected = null" />
   </main>
 </template>
 

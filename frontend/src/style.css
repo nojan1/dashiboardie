@@ -57,3 +57,6 @@
 * { box-sizing: border-box; }
 body { margin: 0; }
 button, input, select { font: inherit; color: inherit; }
+
+/* Keep the page from scrolling behind an open modal. */
+html:has(dialog[open]) { overflow: hidden; }
