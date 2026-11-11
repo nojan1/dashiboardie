@@ -4,6 +4,7 @@ package systemd
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"dashiboardie/internal/service"
@@ -13,17 +14,24 @@ import (
 type Provider struct {
 	sc    *systemctl.Client
 	units []string
+	urls  map[string]string // unit -> configured link
 }
 
-func New(sc *systemctl.Client, units []string) *Provider {
-	normalized := make([]string, len(units))
-	for i, u := range units {
+// New takes unit specs of the form "name" or "name=url". A name without a
+// suffix gets ".service" added.
+func New(sc *systemctl.Client, specs []string) *Provider {
+	p := &Provider{sc: sc, urls: map[string]string{}}
+	for _, spec := range specs {
+		u, url, _ := strings.Cut(spec, "=")
 		if !strings.Contains(u, ".") {
 			u += ".service"
 		}
-		normalized[i] = u
+		p.units = append(p.units, u)
+		if url != "" {
+			p.urls[u] = url
+		}
 	}
-	return &Provider{sc: sc, units: normalized}
+	return p
 }
 
 func (p *Provider) Sources() []service.Source { return []service.Source{service.SourceSystemd} }
@@ -33,14 +41,22 @@ func (p *Provider) List(ctx context.Context) ([]service.Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(units) != len(p.units) {
+		return nil, fmt.Errorf("systemctl show returned %d units, expected %d", len(units), len(p.units))
+	}
 	out := make([]service.Service, 0, len(units))
-	for _, u := range units {
+	for i, u := range units {
+		// `systemctl show` answers in request order. Keep the configured name
+		// as the ID (it's what the allowlist checks), since an alias reports
+		// the canonical unit as u.ID.
+		name := p.units[i]
 		s := service.Service{
-			ID:     u.ID,
+			ID:     name,
 			Source: service.SourceSystemd,
-			Name:   strings.TrimSuffix(u.ID, ".service"),
+			Name:   strings.TrimSuffix(name, ".service"),
 			Status: u.Status(),
 			Unit:   u.ID,
+			URL:    p.urls[name],
 		}
 		if u.LoadState == "not-found" {
 			s.Status = service.StatusUnknown

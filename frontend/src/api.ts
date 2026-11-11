@@ -15,6 +15,8 @@ export interface Service {
   status: Status
   metrics?: Metrics
   unit?: string
+  url?: string
+  address?: string
 }
 
 export interface ProviderError {

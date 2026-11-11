@@ -29,6 +29,21 @@ const loaded = ref(false)
 
 const key = (s: Service) => `${s.source}/${s.id}`
 
+// Only http(s) links are rendered, so a crafted label or config value can't
+// become a javascript: URL.
+function safeUrl(url?: string) {
+  if (!url) return undefined
+  try {
+    const u = new URL(url)
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// "https://jellyfin.example.com/" -> "jellyfin.example.com"
+const displayUrl = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '')
+
 const sources = computed(() => [...new Set(services.value.map((s) => s.source))].sort())
 const statuses = computed(() => [...new Set(services.value.map((s) => s.status))].sort())
 
@@ -145,6 +160,7 @@ onUnmounted(() => {
           <tr>
             <th>Source</th>
             <th>Name</th>
+            <th>Address</th>
             <th>Status</th>
             <th class="num">CPU</th>
             <th class="num">Memory</th>
@@ -155,6 +171,13 @@ onUnmounted(() => {
           <tr v-for="s in filtered" :key="key(s)" :class="{ selected: selected && key(selected) === key(s) }">
             <td><span class="tag">{{ s.source }}</span></td>
             <td>{{ s.name }}</td>
+            <td class="address">
+              <a v-if="safeUrl(s.url)" :href="safeUrl(s.url)" target="_blank" rel="noopener noreferrer">
+                {{ displayUrl(s.url!) }}<span class="ext" aria-hidden="true">↗</span>
+              </a>
+              <span v-else-if="s.address" class="ip">{{ s.address }}</span>
+              <span v-else class="none">—</span>
+            </td>
             <td><span class="status" :class="s.status">{{ s.status }}</span></td>
             <td class="num">{{ formatPercent(s.metrics?.cpuPercent) }}</td>
             <td class="num">{{ formatBytes(s.metrics?.memoryBytes) }}</td>
@@ -166,7 +189,7 @@ onUnmounted(() => {
             </td>
           </tr>
           <tr v-if="!filtered.length">
-            <td colspan="6" class="empty">{{ loaded ? 'No services match.' : 'Loading…' }}</td>
+            <td colspan="7" class="empty">{{ loaded ? 'No services match.' : 'Loading…' }}</td>
           </tr>
         </tbody>
       </table>
@@ -225,6 +248,11 @@ th { font-size: 0.8rem; text-transform: uppercase; color: var(--muted); font-wei
 tr.selected td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .tag { font: 12px var(--mono); color: var(--muted); }
+.address a { color: var(--accent); text-decoration: none; }
+.address a:hover { text-decoration: underline; }
+.address .ext { margin-left: 0.25em; font-size: 0.8em; }
+.address .ip { font: 13px var(--mono); }
+.address .none { color: var(--muted); }
 .status::before {
   content: '';
   display: inline-block;

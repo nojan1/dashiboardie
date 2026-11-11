@@ -5,6 +5,7 @@ package incus
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,17 +25,84 @@ func (p *Provider) Sources() []service.Source { return []service.Source{service.
 
 // instance is the subset of `incus list --format json` we use.
 type instance struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Type   string `json:"type"`
-	State  *struct {
+	Name           string                       `json:"name"`
+	Status         string                       `json:"status"`
+	Type           string                       `json:"type"`
+	Config         map[string]string            `json:"config"`
+	ExpandedDevice map[string]map[string]string `json:"expanded_devices"`
+	State          *struct {
 		CPU struct {
 			Usage uint64 `json:"usage"` // cumulative nanoseconds
 		} `json:"cpu"`
 		Memory struct {
 			Usage uint64 `json:"usage"` // bytes
 		} `json:"memory"`
+		Network map[string]iface `json:"network"`
 	} `json:"state"`
+}
+
+type iface struct {
+	Hwaddr    string `json:"hwaddr"`
+	Type      string `json:"type"`
+	Addresses []struct {
+		Family  string `json:"family"`
+		Address string `json:"address"`
+		Scope   string `json:"scope"`
+	} `json:"addresses"`
+}
+
+// primaryAddress picks the instance's IP on its incus-managed NIC.
+//
+// Instances (VMs especially) often report extra interfaces, e.g. Home
+// Assistant OS shows docker0 and hassio bridges, so "first IP" is wrong.
+// Incus-managed NICs are found by MAC address: volatile.<nic>.hwaddr in the
+// config, or hwaddr on a nic device. Without a match it falls back to eth0,
+// then to any non-loopback interface. IPv4 is preferred over IPv6.
+func (in instance) primaryAddress() string {
+	if in.State == nil || len(in.State.Network) == 0 {
+		return ""
+	}
+	managed := map[string]bool{}
+	for k, v := range in.Config {
+		if strings.HasPrefix(k, "volatile.") && strings.HasSuffix(k, ".hwaddr") && v != "" {
+			managed[strings.ToLower(v)] = true
+		}
+	}
+	for _, dev := range in.ExpandedDevice {
+		if dev["type"] == "nic" && dev["hwaddr"] != "" {
+			managed[strings.ToLower(dev["hwaddr"])] = true
+		}
+	}
+
+	names := make([]string, 0, len(in.State.Network))
+	for name := range in.State.Network {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	pick := func(match func(name string, nic iface) bool) string {
+		for _, family := range []string{"inet", "inet6"} {
+			for _, name := range names {
+				nic := in.State.Network[name]
+				if nic.Type == "loopback" || name == "lo" || !match(name, nic) {
+					continue
+				}
+				for _, a := range nic.Addresses {
+					if a.Family == family && a.Scope == "global" {
+						return a.Address
+					}
+				}
+			}
+		}
+		return ""
+	}
+	if a := pick(func(_ string, nic iface) bool { return managed[strings.ToLower(nic.Hwaddr)] }); a != "" {
+		return a
+	}
+	if a := pick(func(name string, _ iface) bool { return name == "eth0" }); a != "" {
+		return a
+	}
+	return pick(func(string, iface) bool { return true })
 }
 
 func (p *Provider) List(ctx context.Context) ([]service.Service, error) {
@@ -54,6 +122,9 @@ func (p *Provider) List(ctx context.Context) ([]service.Service, error) {
 			Source: service.SourceIncus,
 			Name:   in.Name,
 			Status: instanceStatus(in.Status),
+		}
+		if s.Status == service.StatusRunning {
+			s.Address = in.primaryAddress()
 		}
 		if in.State != nil && s.Status == service.StatusRunning {
 			mem := in.State.Memory.Usage

@@ -67,3 +67,56 @@ func TestDoAndLogs(t *testing.T) {
 		t.Fatalf("unexpected log lines: %q", lines)
 	}
 }
+
+// Reduced from `incus list --format json` on the test VM. Home Assistant OS
+// reports docker0/hassio bridges besides its real NIC (matched by the
+// volatile hwaddr); unifi has no volatile hwaddr and falls back to eth0.
+const addressOutput = `[
+  {"name": "homeassistant", "status": "Running", "type": "virtual-machine",
+   "config": {"volatile.eth0.hwaddr": "02:00:00:b2:00:02"},
+   "expanded_devices": {"eth0": {"type": "nic", "network": "lan"}},
+   "state": {"network": {
+     "docker0": {"hwaddr": "02:42:75:31:63:e9", "type": "broadcast", "addresses": [
+       {"family": "inet", "address": "172.30.232.1", "scope": "global"}]},
+     "enp5s0": {"hwaddr": "02:00:00:b2:00:02", "type": "broadcast", "addresses": [
+       {"family": "inet6", "address": "fda6:17a0:8f66:26da:5a8f:25cf:ea7b:7f25", "scope": "global"},
+       {"family": "inet", "address": "192.168.1.104", "scope": "global"},
+       {"family": "inet6", "address": "fe80::342b:ed87:4dba:79cd", "scope": "link"}]},
+     "hassio": {"hwaddr": "02:42:a0:a3:7c:fe", "type": "broadcast", "addresses": [
+       {"family": "inet", "address": "172.30.32.1", "scope": "global"}]},
+     "lo": {"hwaddr": "", "type": "loopback", "addresses": [
+       {"family": "inet", "address": "127.0.0.1", "scope": "local"}]}}}},
+  {"name": "unifi", "status": "Running", "type": "container",
+   "config": {}, "expanded_devices": {"eth0": {"type": "nic"}},
+   "state": {"network": {
+     "eth0": {"hwaddr": "02:00:00:b2:00:01", "type": "broadcast", "addresses": [
+       {"family": "inet", "address": "10.10.10.104", "scope": "global"}]},
+     "lo": {"hwaddr": "", "type": "loopback", "addresses": [
+       {"family": "inet", "address": "127.0.0.1", "scope": "local"}]}}}},
+  {"name": "v6only", "status": "Running", "type": "container",
+   "config": {"volatile.eth0.hwaddr": "02:00:00:00:00:03"},
+   "state": {"network": {
+     "eth0": {"hwaddr": "02:00:00:00:00:03", "type": "broadcast", "addresses": [
+       {"family": "inet6", "address": "fe80::1", "scope": "link"},
+       {"family": "inet6", "address": "2001:db8::3", "scope": "global"}]}}}},
+  {"name": "stopped", "status": "Stopped", "type": "container", "config": {}, "state": null}
+]`
+
+func TestPrimaryAddress(t *testing.T) {
+	f := &execx.Fake{Responses: map[string]string{"incus list --format json": addressOutput}}
+	svcs, err := New(f).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"homeassistant": "192.168.1.104",
+		"unifi":         "10.10.10.104",
+		"v6only":        "2001:db8::3",
+		"stopped":       "",
+	}
+	for _, s := range svcs {
+		if s.Address != want[s.ID] {
+			t.Errorf("%s: got %q, want %q", s.ID, s.Address, want[s.ID])
+		}
+	}
+}

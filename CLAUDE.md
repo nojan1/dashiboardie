@@ -96,3 +96,9 @@ For UI work, run the backend with `-mock` and `npm run dev` side by side.
   - Disk % uses the same basis as `df`: used / (used + avail).
   - Because of this, the NixOS module must not use mount-namespacing options such as `ProtectHome` or `PrivateTmp`: they would change what the service sees mounted.
 - **Frontend usage thresholds:** set in `usageLevel` in `frontend/src/format.ts`: 75% is warning and 90% is critical. Meters switch colour at those levels, and `UsageFlag` adds a text label, so the state is never shown by colour alone.
+- **Service links (`Service.URL`, `Service.Address`):**
+  - podman/Quadlet links come from Traefik docker-provider labels: the first `Host()` (plus `PathPrefix()`) of a router's `rule`. The scheme is https when the router has `tls`/`tls.certresolver` or an entrypoint named like `websecure`/`https`; `traefik.enable=false` suppresses the link.
+  - Quadlet labels are read from the `[X-Container]` section that Quadlet copies into the generated unit, so links still show while the Quadlet is stopped and its container is gone.
+  - incus shows an IP (`Address`), not a link: the global address on the NIC whose MAC matches `volatile.<nic>.hwaddr` or a nic device's `hwaddr`, then `eth0`, then any non-loopback interface; IPv4 is preferred. VMs such as Home Assistant OS report Docker bridges too, so "first IP" would be wrong.
+  - systemd links are configured: `-systemd-units name=url,...`, or `services.dashiboardie.systemdUnitUrls` in the module. A systemd service's `ID` is the configured name and `Unit` is what systemd reports, which differ for aliases.
+  - The frontend renders only `http:`/`https:` URLs (`safeUrl` in `App.vue`), since labels and config are not fully trusted.

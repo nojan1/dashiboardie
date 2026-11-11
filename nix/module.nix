@@ -10,6 +10,11 @@
 
 let
   cfg = config.services.dashiboardie;
+
+  # Units from both options, each as "name" or "name=url" for -systemd-units.
+  unitSpecs = map (u: if cfg.systemdUnitUrls ? ${u} then "${u}=${cfg.systemdUnitUrls.${u}}" else u) (
+    lib.unique (cfg.systemdUnits ++ lib.attrNames cfg.systemdUnitUrls)
+  );
 in
 {
   options.services.dashiboardie = {
@@ -44,6 +49,19 @@ in
       '';
     };
 
+    systemdUnitUrls = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = {
+        jellyfin = "https://jellyfin.example.com";
+      };
+      description = ''
+        Links shown for systemd units, keyed by unit name as written in
+        `systemdUnits`. Units listed here are shown even if they are missing
+        from `systemdUnits`.
+      '';
+    };
+
     podman = lib.mkOption {
       type = lib.types.bool;
       default = config.virtualisation.podman.enable;
@@ -66,6 +84,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = lib.all (s: !(lib.hasInfix "," s)) unitSpecs;
+        message = "services.dashiboardie: systemd unit names and URLs must not contain commas.";
+      }
+    ];
+
     systemd.services.dashiboardie = {
       description = "dashiboardie service dashboard";
       wantedBy = [ "multi-user.target" ];
@@ -85,9 +110,9 @@ in
             "-addr"
             cfg.listenAddress
           ]
-          ++ lib.optionals (cfg.systemdUnits != [ ]) [
+          ++ lib.optionals (unitSpecs != [ ]) [
             "-systemd-units"
-            (lib.concatStringsSep "," cfg.systemdUnits)
+            (lib.concatStringsSep "," unitSpecs)
           ]
           ++ cfg.extraArgs
         );

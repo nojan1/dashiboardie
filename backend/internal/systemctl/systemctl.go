@@ -113,6 +113,7 @@ func parseUint(v string) *uint64 {
 // GeneratedUnit is a service unit file written by a systemd generator.
 type GeneratedUnit struct {
 	Name       string
+	Path       string // full path of the generated unit file
 	SourcePath string // the file the generator built it from, if recorded
 }
 
@@ -150,7 +151,7 @@ func (c *Client) GeneratedServices() ([]GeneratedUnit, error) {
 			if err != nil {
 				return nil, err
 			}
-			units = append(units, GeneratedUnit{Name: name, SourcePath: src})
+			units = append(units, GeneratedUnit{Name: name, Path: filepath.Join(dir, name), SourcePath: src})
 		}
 	}
 	sort.Slice(units, func(i, j int) bool { return units[i].Name < units[j].Name })

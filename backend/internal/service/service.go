@@ -55,6 +55,11 @@ type Service struct {
 	// Unit is the systemd unit backing this service, if any. The registry uses
 	// it to drop systemd entries that duplicate a Quadlet-managed container.
 	Unit string `json:"unit,omitempty"`
+	// URL is a link to the service's web UI, if known (Traefik labels for
+	// podman/Quadlet, configured for systemd units).
+	URL string `json:"url,omitempty"`
+	// Address is the service's primary IP, shown as text (incus instances).
+	Address string `json:"address,omitempty"`
 }
 
 // Provider is implemented by each service source.

@@ -59,3 +59,28 @@ func TestDoRejectsUnlistedUnits(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestURLsAndAliases(t *testing.T) {
+	cmd := "systemctl show --no-pager -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec -- jellyfin.service dbus.service"
+	f := &execx.Fake{Responses: map[string]string{
+		// dbus.service is an alias; systemd reports the canonical unit.
+		cmd: "Id=jellyfin.service\nActiveState=active\n\nId=dbus-broker.service\nActiveState=active\n",
+		"systemctl restart --no-block -- dbus.service": "",
+	}}
+	p := New(&systemctl.Client{Run: f}, []string{"jellyfin=https://jellyfin.example.com/web", "dbus.service"})
+	ctx := context.Background()
+	svcs, err := p.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svcs[0].URL != "https://jellyfin.example.com/web" || svcs[1].URL != "" {
+		t.Errorf("urls: %q, %q", svcs[0].URL, svcs[1].URL)
+	}
+	if svcs[1].ID != "dbus.service" || svcs[1].Unit != "dbus-broker.service" {
+		t.Errorf("alias: %+v", svcs[1])
+	}
+	// The listed id must pass the allowlist.
+	if err := p.Do(ctx, service.SourceSystemd, svcs[1].ID, service.ActionRestart); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -28,19 +28,21 @@ func metrics(cpu float64, memMiB uint64) *service.Metrics {
 func All() []service.Provider {
 	return []service.Provider{
 		newProvider(service.SourceQuadlet,
-			service.Service{ID: "jellyfin", Name: "jellyfin", Status: service.StatusRunning, Unit: "jellyfin.service", Metrics: metrics(3.2, 512)},
+			service.Service{ID: "jellyfin", Name: "jellyfin", Status: service.StatusRunning, Unit: "jellyfin.service", Metrics: metrics(3.2, 512), URL: "https://jellyfin.example.com"},
 		),
 		newProvider(service.SourcePodman,
 			service.Service{ID: "redis", Name: "redis", Status: service.StatusRunning, Metrics: metrics(0.4, 24)},
+			service.Service{ID: "bazarr", Name: "bazarr", Status: service.StatusRunning, Metrics: metrics(1.1, 180), URL: "http://bazarr.home"},
 		),
 		newProvider(service.SourceIncus,
 			service.Service{ID: "dev-vm", Name: "dev-vm", Status: service.StatusStopped},
+			service.Service{ID: "homeassistant", Name: "homeassistant", Status: service.StatusRunning, Address: "192.168.1.104"},
 		),
 		newProvider(service.SourceNixOS,
 			service.Service{ID: "builder", Name: "builder", Status: service.StatusRunning},
 		),
 		newProvider(service.SourceSystemd,
-			service.Service{ID: "nginx.service", Name: "nginx", Status: service.StatusRunning, Unit: "nginx.service"},
+			service.Service{ID: "nginx.service", Name: "nginx", Status: service.StatusRunning, Unit: "nginx.service", URL: "https://nginx.example.com/status"},
 			service.Service{ID: "backup.service", Name: "backup", Status: service.StatusFailed, Unit: "backup.service"},
 			// Duplicate of the Quadlet above; the registry should hide it.
 			service.Service{ID: "jellyfin.service", Name: "jellyfin", Status: service.StatusRunning, Unit: "jellyfin.service"},

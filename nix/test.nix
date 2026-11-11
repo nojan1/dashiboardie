@@ -25,12 +25,15 @@ pkgs.testers.runNixOSTest {
     services.dashiboardie = {
       enable = true;
       systemdUnits = [ "hello" ];
+      systemdUnitUrls.hello = "https://hello.example.com";
     };
 
     virtualisation.podman.enable = true;
     environment.etc."containers/systemd/web.container".text = ''
       [Container]
       Image=docker-archive:${image}
+      Label=traefik.http.routers.web.entrypoints=web
+      Label=traefik.http.routers.web.rule=Host(`web.home`)
 
       [Install]
       WantedBy=multi-user.target
@@ -73,6 +76,11 @@ pkgs.testers.runNixOSTest {
         ids = sorted(f'{s["source"]}/{s["id"]}' for s in res["services"])
         assert ids == ["quadlet/web.service", "systemd/hello.service"], ids
         assert find(res, "systemd", "hello.service")["status"] == "running", res
+
+    with subtest("links from config and traefik labels"):
+        res = services()
+        assert find(res, "systemd", "hello.service")["url"] == "https://hello.example.com", res
+        assert find(res, "quadlet", "web.service")["url"] == "http://web.home", res
 
     with subtest("listing is fast"):
         # Regression: list-unit-files made this take >10s on small VMs.

@@ -97,8 +97,8 @@ func TestGeneratedServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []GeneratedUnit{
-		{Name: "other.service"},
-		{Name: "web.service", SourcePath: "/etc/containers/systemd/web.container"},
+		{Name: "other.service", Path: filepath.Join(late, "other.service")},
+		{Name: "web.service", Path: filepath.Join(gen, "web.service"), SourcePath: "/etc/containers/systemd/web.container"},
 	}
 	if !reflect.DeepEqual(units, want) {
 		t.Fatalf("got %+v, want %+v", units, want)

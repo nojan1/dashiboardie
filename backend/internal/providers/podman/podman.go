@@ -64,9 +64,15 @@ func (p *Provider) quadlets(ctx context.Context) ([]service.Service, error) {
 		return nil, err
 	}
 	var names []string
+	urls := map[string]string{}
 	for _, g := range generated {
-		if isQuadletSource(g.SourcePath) {
-			names = append(names, g.Name)
+		if !isQuadletSource(g.SourcePath) {
+			continue
+		}
+		names = append(names, g.Name)
+		// Links are best effort: an unreadable unit just gets no URL.
+		if labels, err := quadletLabels(g.Path); err == nil {
+			urls[g.Name] = traefikURL(labels)
 		}
 	}
 	units, err := p.sc.Show(ctx, names...)
@@ -82,6 +88,7 @@ func (p *Provider) quadlets(ctx context.Context) ([]service.Service, error) {
 			Status:  u.Status(),
 			Metrics: p.sc.Metrics(u),
 			Unit:    u.ID,
+			URL:     urls[u.ID],
 		})
 	}
 	return out, nil
@@ -141,6 +148,7 @@ func (p *Provider) containers(ctx context.Context, quadlets []service.Service, w
 			Name:   e.Names[0],
 			Status: containerStatus(e.State),
 			Unit:   e.Labels["PODMAN_SYSTEMD_UNIT"],
+			URL:    traefikURL(e.Labels),
 		}
 		if s.Status == service.StatusRunning {
 			anyRunning = true

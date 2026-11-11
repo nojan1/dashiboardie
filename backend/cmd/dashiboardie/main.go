@@ -24,7 +24,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "listen address")
 	static := flag.String("static", "", "directory with the built frontend to serve (e.g. ../frontend/dist)")
 	useMock := flag.Bool("mock", false, "use fake in-memory providers instead of the real sources")
-	units := flag.String("systemd-units", "", "comma-separated systemd units to show")
+	units := flag.String("systemd-units", "", "comma-separated systemd units to show, each optionally with a link: nginx,jellyfin=https://jellyfin.example.com")
 	nixosDir := flag.String("nixos-containers-dir", nixos.DefaultConfigDir, "directory with NixOS container configs")
 	flag.Parse()
 
