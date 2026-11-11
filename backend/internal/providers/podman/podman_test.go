@@ -3,6 +3,8 @@ package podman
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"dashiboardie/internal/execx"
@@ -11,10 +13,11 @@ import (
 )
 
 const (
-	generatedCmd = "systemctl --user list-unit-files --type=service --state=generated --no-legend --no-pager"
-	showCmd      = "systemctl --user show --no-pager -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec -- jellyfin.service other-generated.service"
-	psCmd        = "podman ps --all --format json"
-	statsCmd     = "podman stats --no-stream --format {{json .ContainerStats}}"
+	// Only the Quadlet unit is shown; other generated units are filtered
+	// out by SourcePath before systemctl is called.
+	showCmd  = "systemctl --user show --no-pager -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec -- jellyfin.service"
+	psCmd    = "podman ps --all --format json"
+	statsCmd = "podman stats --no-stream --format {{json .ContainerStats}}"
 )
 
 // Trimmed from real `podman ps --all --format json` output. The jellyfin
@@ -31,16 +34,11 @@ const psOutput = `[
 
 func newFake() *execx.Fake {
 	return &execx.Fake{Responses: map[string]string{
-		generatedCmd: "jellyfin.service          generated -\nother-generated.service   generated -\n",
 		showCmd: `Id=jellyfin.service
 ActiveState=active
 SourcePath=/home/u/.config/containers/systemd/jellyfin.container
 MemoryCurrent=536870912
 CPUUsageNSec=100
-
-Id=other-generated.service
-ActiveState=active
-SourcePath=/etc/fstab
 `,
 		psCmd: psOutput,
 		statsCmd: `{"ContainerID":"aaa","CPUNano":1,"MemUsage":1}
@@ -49,12 +47,25 @@ SourcePath=/etc/fstab
 	}}
 }
 
-func newProvider(f *execx.Fake) *Provider {
-	return New(f, &systemctl.Client{Run: f, User: true})
+// newProvider sets up a generator directory holding one Quadlet unit and one
+// unrelated generated unit.
+func newProvider(t *testing.T, f *execx.Fake) *Provider {
+	t.Helper()
+	gen := t.TempDir()
+	files := map[string]string{
+		"jellyfin.service":        "[Unit]\nSourcePath=/home/u/.config/containers/systemd/jellyfin.container\n",
+		"other-generated.service": "[Unit]\nSourcePath=/etc/fstab\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(gen, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return New(f, &systemctl.Client{Run: f, User: true, GeneratorDirs: []string{gen}})
 }
 
 func TestList(t *testing.T) {
-	svcs, err := newProvider(newFake()).List(context.Background())
+	svcs, err := newProvider(t, newFake()).List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +96,7 @@ func TestDoRoutesBySource(t *testing.T) {
 	f := newFake()
 	f.Responses["systemctl --user restart --no-block -- jellyfin.service"] = ""
 	f.Responses["podman stop -- redis"] = ""
-	p := newProvider(f)
+	p := newProvider(t, f)
 	ctx := context.Background()
 
 	if err := p.Do(ctx, service.SourceQuadlet, "jellyfin.service", service.ActionRestart); err != nil {
@@ -100,5 +111,16 @@ func TestDoRoutesBySource(t *testing.T) {
 	}
 	if err := p.Do(ctx, service.SourcePodman, "--all", service.ActionStop); !errors.Is(err, service.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestDoSkipsStats(t *testing.T) {
+	f := newFake()
+	f.Responses["podman stop -- redis"] = ""
+	if err := newProvider(t, f).Do(context.Background(), service.SourcePodman, "redis", service.ActionStop); err != nil {
+		t.Fatal(err)
+	}
+	if f.Called(statsCmd) {
+		t.Fatal("validating an action should not run podman stats")
 	}
 }

@@ -79,12 +79,38 @@ async function act(s: Service, action: Action) {
   }
 }
 
+// Schedule the next refresh only after the current one finishes, so a slow
+// server never has overlapping refreshes piling up. Skip while the tab is
+// hidden; refresh immediately when it becomes visible again.
 let timer: number | undefined
+let stopped = false
+let polling = false
+
+async function poll() {
+  if (polling) return // the running poll schedules the next one
+  window.clearTimeout(timer)
+  polling = true
+  try {
+    if (!document.hidden) await refresh()
+  } finally {
+    polling = false
+  }
+  if (!stopped) timer = window.setTimeout(poll, REFRESH_MS)
+}
+
+function onVisibility() {
+  if (!document.hidden) poll()
+}
+
 onMounted(() => {
-  refresh()
-  timer = window.setInterval(refresh, REFRESH_MS)
+  poll()
+  document.addEventListener('visibilitychange', onVisibility)
 })
-onUnmounted(() => window.clearInterval(timer))
+onUnmounted(() => {
+  stopped = true
+  window.clearTimeout(timer)
+  document.removeEventListener('visibilitychange', onVisibility)
+})
 </script>
 
 <template>

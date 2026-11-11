@@ -41,11 +41,17 @@ func (p *Provider) Sources() []service.Source {
 }
 
 func (p *Provider) List(ctx context.Context) ([]service.Service, error) {
+	return p.list(ctx, true)
+}
+
+// list collects quadlets and containers. withStats=false skips the slow
+// `podman stats` call; Do and Logs only need the list to validate ids.
+func (p *Provider) list(ctx context.Context, withStats bool) ([]service.Service, error) {
 	quadlets, err := p.quadlets(ctx)
 	if err != nil {
 		return nil, err
 	}
-	containers, err := p.containers(ctx, quadlets)
+	containers, err := p.containers(ctx, quadlets, withStats)
 	if err != nil {
 		return nil, err
 	}
@@ -53,19 +59,22 @@ func (p *Provider) List(ctx context.Context) ([]service.Service, error) {
 }
 
 func (p *Provider) quadlets(ctx context.Context) ([]service.Service, error) {
-	generated, err := p.sc.GeneratedServices(ctx)
+	generated, err := p.sc.GeneratedServices()
 	if err != nil {
 		return nil, err
 	}
-	units, err := p.sc.Show(ctx, generated...)
+	var names []string
+	for _, g := range generated {
+		if isQuadletSource(g.SourcePath) {
+			names = append(names, g.Name)
+		}
+	}
+	units, err := p.sc.Show(ctx, names...)
 	if err != nil {
 		return nil, err
 	}
 	var out []service.Service
 	for _, u := range units {
-		if !isQuadletSource(u.SourcePath) {
-			continue
-		}
 		out = append(out, service.Service{
 			ID:      u.ID,
 			Source:  service.SourceQuadlet,
@@ -104,7 +113,7 @@ type statsEntry struct {
 	MemUsage    uint64 `json:"MemUsage"`
 }
 
-func (p *Provider) containers(ctx context.Context, quadlets []service.Service) ([]service.Service, error) {
+func (p *Provider) containers(ctx context.Context, quadlets []service.Service, withStats bool) ([]service.Service, error) {
 	out, err := p.run.Output(ctx, "podman", "ps", "--all", "--format", "json")
 	if err != nil {
 		return nil, err
@@ -140,7 +149,7 @@ func (p *Provider) containers(ctx context.Context, quadlets []service.Service) (
 		svcs = append(svcs, s)
 	}
 
-	if anyRunning {
+	if withStats && anyRunning {
 		// Metrics are best effort: a stats failure shouldn't hide the list.
 		if stats, err := p.stats(ctx); err == nil {
 			now := time.Now()
@@ -192,7 +201,7 @@ func containerStatus(state string) service.Status {
 
 // find validates a client-supplied id against the current list.
 func (p *Provider) find(ctx context.Context, src service.Source, id string) (service.Service, error) {
-	svcs, err := p.List(ctx)
+	svcs, err := p.list(ctx, false)
 	if err != nil {
 		return service.Service{}, err
 	}

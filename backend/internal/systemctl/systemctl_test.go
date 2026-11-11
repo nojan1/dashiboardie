@@ -1,11 +1,12 @@
 package systemctl
 
 import (
-	"context"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
-	"dashiboardie/internal/execx"
 	"dashiboardie/internal/service"
 )
 
@@ -64,11 +65,42 @@ func TestCPUSampler(t *testing.T) {
 	}
 }
 
-func TestGeneratedServicesNoMatches(t *testing.T) {
-	cmd := "systemctl --user list-unit-files --type=service --state=generated --no-legend --no-pager"
-	f := &execx.Fake{Errors: map[string]error{cmd: &execx.Error{Cmd: cmd, ExitCode: 1}}}
-	units, err := (&Client{Run: f, User: true}).GeneratedServices(context.Background())
-	if err != nil || len(units) != 0 {
-		t.Fatalf("want no units and no error, got %v, %v", units, err)
+func TestGeneratedServices(t *testing.T) {
+	gen := t.TempDir()
+	late := t.TempDir()
+	write := func(dir, name, content string) {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Shape of real quadlet output (podman 5.8).
+	write(gen, "web.service", "[X-Container]\nImage=nginx\n\n[Unit]\nWants=network-online.target\nSourcePath=/etc/containers/systemd/web.container\n\n[Service]\nExecStart=podman run\n")
+	write(gen, "home.mount", "[Mount]\nWhat=/dev/sda2\n")
+	write(gen, "tmpl@.service", "[Unit]\nSourcePath=/etc/containers/systemd/tmpl@.container\n")
+	write(late, "other.service", "[Unit]\nDescription=no source path\n")
+	if err := os.MkdirAll(filepath.Join(gen, "default.target.wants"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../web.service", filepath.Join(gen, "default.target.wants", "web.service")); err != nil {
+		t.Fatal(err)
+	}
+
+	missing := filepath.Join(t.TempDir(), "nope")
+	c := &Client{GeneratorDirs: []string{missing, gen, late}}
+	units, err := c.GeneratedServices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []GeneratedUnit{
+		{Name: "other.service"},
+		{Name: "web.service", SourcePath: "/etc/containers/systemd/web.container"},
+	}
+	if !reflect.DeepEqual(units, want) {
+		t.Fatalf("got %+v, want %+v", units, want)
 	}
 }

@@ -58,7 +58,7 @@ For UI work, run the backend with `-mock` and `npm run dev` side by side.
 
 - **Provider model** (`backend/internal/service/service.go`): each source implements `Provider` (`Sources`, `List`, `Do`, `Logs`) and returns the normalized `Service` struct. `frontend/src/api.ts` mirrors these types by hand, so keep the two in sync.
 - **Registry** (`backend/internal/service/registry.go`):
-  - It lists every provider concurrently, each with a 10s timeout, and merges the results.
+  - It lists every provider concurrently, each with a 10s timeout, and merges the results. Concurrent callers share one in-flight load, a result under 2s old is reused (`cacheTTL`), and an action invalidates it. A provider taking over 2s is logged as `slow provider`.
   - It routes actions and logs to a provider by the `source` in the URL, and passes that source along.
   - When one provider fails, it reports that in `errors` and still returns the other sources.
 - **Validating client IDs:** the API is unauthenticated, so `Do`/`Logs` must check the client-supplied ID against the provider's own list before running anything (`service.Find`, the systemd allowlist, or the NixOS config dir). Commands also pass `--` before the ID.
@@ -73,7 +73,7 @@ For UI work, run the backend with `-mock` and `npm run dev` side by side.
   - `systemd`: only the units passed in with `-systemd-units`. A name without a suffix gets `.service` added.
   - `nixos`: containers are discovered from `*.conf` files in `/etc/nixos-containers` and controlled as `container@<name>.service`.
   - `podman` handles both the `podman` and `quadlet` sources:
-    - Quadlets are found through systemd: they're `generated` service units whose `SourcePath` ends in `.container`, `.pod` or `.kube`. They aren't found through `podman ps`, because Quadlet containers use `--rm` and a stopped Quadlet has no container. The `PODMAN_SYSTEMD_UNIT` label is set by podman-compose too, so it doesn't prove a container is a Quadlet.
+    - Quadlets are found by reading the generator output directories (`/run/systemd/generator*`, or `$XDG_RUNTIME_DIR/systemd/generator*` when rootless) for service files whose `SourcePath=` ends in `.container`, `.pod` or `.kube`. They aren't found through `podman ps`, because Quadlet containers use `--rm` and a stopped Quadlet has no container. The `PODMAN_SYSTEMD_UNIT` label is set by podman-compose too, so it doesn't prove a container is a Quadlet.
     - A container whose label points at a Quadlet unit is hidden from the plain podman list.
     - Quadlet actions and logs go through systemctl and journalctl.
     - Podman is per-user: as root it sees rootful podman and the system manager; otherwise it sees rootless podman and `systemctl --user`.
@@ -81,7 +81,7 @@ For UI work, run the backend with `-mock` and `npm run dev` side by side.
   - `mock` (`-mock`): one in-memory provider per source. It includes a systemd duplicate of a Quadlet so the registry's dedupe can be tested.
   - `main.go` skips any provider whose CLI isn't in `PATH`.
 - **Quadlet dedupe:** the registry also removes `systemd` entries whose `Unit` matches a Quadlet. That covers a Quadlet unit that has also been listed in `-systemd-units`.
-- **systemctl quirk:** `list-unit-files` exits 1 with no output when nothing matches, and `GeneratedServices` treats that as an empty result.
+- **Never use `systemctl list-unit-files`:** PID 1 resolves every unit file on disk for it, which took 8.7s on a 4-core VM and blocks other systemctl calls meanwhile. Its `--state=generated` filter also misses Quadlets that have a NixOS-written unit file in `/etc/systemd/system`, which systemd reports as `bad`.
 - **HTTP API** (`backend/internal/api`): uses Go 1.22+ `ServeMux` method and path patterns:
   - `GET /api/services` returns `{services, errors}`.
   - `POST /api/services/{source}/{id}/{start|stop|restart}` returns 204 on success.

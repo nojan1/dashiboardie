@@ -3,8 +3,14 @@
 package systemctl
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,7 +25,9 @@ import (
 type Client struct {
 	Run  execx.Runner
 	User bool
-	cpu  CPUSampler
+	// GeneratorDirs overrides where generated units are looked for (tests).
+	GeneratorDirs []string
+	cpu           CPUSampler
 }
 
 type Unit struct {
@@ -102,25 +110,85 @@ func parseUint(v string) *uint64 {
 	return &n
 }
 
-// GeneratedServices lists service unit files created by a generator (this is
-// how Quadlet units appear).
-func (c *Client) GeneratedServices(ctx context.Context) ([]string, error) {
-	out, err := c.Run.Output(ctx, "systemctl", c.args("list-unit-files", "--type=service", "--state=generated", "--no-legend", "--no-pager")...)
-	// systemctl exits 1 with no output when no unit files match.
-	var ee *execx.Error
-	if errors.As(err, &ee) && ee.ExitCode == 1 && ee.Stderr == "" && len(out) == 0 {
-		return nil, nil
+// GeneratedUnit is a service unit file written by a systemd generator.
+type GeneratedUnit struct {
+	Name       string
+	SourcePath string // the file the generator built it from, if recorded
+}
+
+// GeneratedServices lists service units created by generators (this is how
+// Quadlet units appear) by reading the generator output directories.
+//
+// It deliberately avoids `systemctl list-unit-files --state=generated`: that
+// makes PID 1 stat and resolve every unit file on the system, which takes
+// seconds on small VMs, and it blocks other systemctl calls meanwhile.
+func (c *Client) GeneratedServices() ([]GeneratedUnit, error) {
+	dirs := c.GeneratorDirs
+	if dirs == nil {
+		dirs = defaultGeneratorDirs(c.User)
 	}
-	if err != nil {
-		return nil, err
-	}
-	var units []string
-	for _, line := range execx.Lines(out) {
-		if f := strings.Fields(line); len(f) > 0 {
-			units = append(units, f[0])
+	seen := map[string]bool{}
+	var units []GeneratedUnit
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			name := e.Name()
+			// Regular files only: *.wants/ directories hold symlinks, and
+			// templates (foo@.service) can't be shown or started as-is.
+			if !e.Type().IsRegular() || !strings.HasSuffix(name, ".service") ||
+				strings.HasSuffix(name, "@.service") || seen[name] {
+				continue
+			}
+			seen[name] = true
+			src, err := readSourcePath(filepath.Join(dir, name))
+			if err != nil {
+				return nil, err
+			}
+			units = append(units, GeneratedUnit{Name: name, SourcePath: src})
 		}
 	}
+	sort.Slice(units, func(i, j int) bool { return units[i].Name < units[j].Name })
 	return units, nil
+}
+
+// defaultGeneratorDirs are where systemd tells generators to write units
+// (see systemd.generator(7)).
+func defaultGeneratorDirs(user bool) []string {
+	base := "/run/systemd"
+	if user {
+		runtime := os.Getenv("XDG_RUNTIME_DIR")
+		if runtime == "" {
+			runtime = fmt.Sprintf("/run/user/%d", os.Getuid())
+		}
+		base = filepath.Join(runtime, "systemd")
+	}
+	return []string{
+		filepath.Join(base, "generator.early"),
+		filepath.Join(base, "generator"),
+		filepath.Join(base, "generator.late"),
+	}
+}
+
+// readSourcePath returns the SourcePath= value from a unit file, or "".
+func readSourcePath(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "SourcePath="); ok {
+			return v, nil
+		}
+	}
+	return "", sc.Err()
 }
 
 func (c *Client) Do(ctx context.Context, unit string, action service.Action) error {

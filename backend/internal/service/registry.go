@@ -3,18 +3,37 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
 )
 
-// listTimeout bounds each provider so one hung CLI cannot stall the dashboard.
-const listTimeout = 10 * time.Second
+const (
+	// listTimeout bounds each provider so one hung CLI cannot stall the dashboard.
+	listTimeout = 10 * time.Second
+	// cacheTTL lets several browser tabs (or a burst of refreshes) share one
+	// round of CLI calls instead of each starting their own.
+	cacheTTL = 2 * time.Second
+	// slowProvider is when a provider's List gets logged as slow.
+	slowProvider = 2 * time.Second
+)
 
 // Registry aggregates all providers into a single list.
 type Registry struct {
 	all       []Provider
 	providers map[Source]Provider // routing for actions and logs
+
+	mu       sync.Mutex
+	inflight *listing // the load currently running, if any
+	cached   *listing // the last finished load
+}
+
+type listing struct {
+	done     chan struct{}
+	svcs     []Service
+	errs     []ProviderError
+	finished time.Time
 }
 
 func NewRegistry(providers ...Provider) *Registry {
@@ -33,9 +52,57 @@ type ProviderError struct {
 	Error  string `json:"error"`
 }
 
-// List queries every provider concurrently, merges the results, and removes
-// systemd entries whose unit is already represented by a Quadlet service.
+// List returns the merged service list. Concurrent callers share a single
+// in-flight load, and a load younger than cacheTTL is reused. If ctx ends
+// first, List returns nil without cancelling the shared load.
 func (r *Registry) List(ctx context.Context) ([]Service, []ProviderError) {
+	r.mu.Lock()
+	if c := r.cached; c != nil && time.Since(c.finished) < cacheTTL {
+		r.mu.Unlock()
+		return c.svcs, c.errs
+	}
+	l := r.inflight
+	if l == nil {
+		l = &listing{done: make(chan struct{})}
+		r.inflight = l
+		go r.load(l)
+	}
+	r.mu.Unlock()
+
+	select {
+	case <-l.done:
+		return l.svcs, l.errs
+	case <-ctx.Done():
+		return nil, nil
+	}
+}
+
+// invalidate drops the cached list so the next List sees fresh state (used
+// after an action changes something). A load already in flight may predate
+// the action, so it is detached too: its waiters still get its result, but it
+// won't be cached or handed to new callers.
+func (r *Registry) invalidate() {
+	r.mu.Lock()
+	r.cached = nil
+	r.inflight = nil
+	r.mu.Unlock()
+}
+
+func (r *Registry) load(l *listing) {
+	l.svcs, l.errs = r.listAll(context.Background())
+	l.finished = time.Now()
+	r.mu.Lock()
+	if r.inflight == l { // not detached by invalidate
+		r.inflight = nil
+		r.cached = l
+	}
+	r.mu.Unlock()
+	close(l.done)
+}
+
+// listAll queries every provider concurrently, merges the results, and removes
+// systemd entries whose unit is already represented by a Quadlet service.
+func (r *Registry) listAll(ctx context.Context) ([]Service, []ProviderError) {
 	type result struct {
 		src  Source
 		svcs []Service
@@ -49,7 +116,11 @@ func (r *Registry) List(ctx context.Context) ([]Service, []ProviderError) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(ctx, listTimeout)
 			defer cancel()
+			start := time.Now()
 			svcs, err := p.List(ctx)
+			if d := time.Since(start); d > slowProvider {
+				slog.Warn("slow provider", "source", p.Sources()[0], "duration", d.Round(time.Millisecond), "err", err)
+			}
 			results <- result{p.Sources()[0], svcs, err}
 		}()
 	}
@@ -107,7 +178,9 @@ func (r *Registry) Do(ctx context.Context, src Source, id string, action Action)
 	if err != nil {
 		return err
 	}
-	return p.Do(ctx, src, id, action)
+	err = p.Do(ctx, src, id, action)
+	r.invalidate()
+	return err
 }
 
 func (r *Registry) Logs(ctx context.Context, src Source, id string, lines int) ([]string, error) {
