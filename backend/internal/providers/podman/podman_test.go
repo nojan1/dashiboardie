@@ -15,7 +15,7 @@ import (
 const (
 	// Only the Quadlet unit is shown; other generated units are filtered
 	// out by SourcePath before systemctl is called.
-	showCmd  = "systemctl --user show --no-pager -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec -- jellyfin.service"
+	showCmd  = "systemctl --user show --no-pager --timestamp=unix -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec,ActiveEnterTimestamp,NRestarts -- jellyfin.service"
 	psCmd    = "podman ps --all --format json"
 	statsCmd = "podman stats --no-stream --format {{json .ContainerStats}}"
 )
@@ -28,7 +28,8 @@ const psOutput = `[
    "Labels": {"PODMAN_SYSTEMD_UNIT": "jellyfin.service"}},
   {"Id": "bbb", "Names": ["openwebui_openwebui_1"], "State": "exited", "IsInfra": false,
    "Labels": {"PODMAN_SYSTEMD_UNIT": "podman-compose@openwebui.service"}},
-  {"Id": "ccc", "Names": ["redis"], "State": "running", "IsInfra": false, "Labels": null},
+  {"Id": "ccc", "Names": ["redis"], "State": "running", "IsInfra": false, "Labels": null,
+   "StartedAt": 1786213497, "Restarts": 2},
   {"Id": "ddd", "Names": ["efe340b616bc-infra"], "State": "running", "IsInfra": true, "Labels": {}}
 ]`
 
@@ -90,6 +91,9 @@ func TestList(t *testing.T) {
 	if r.Metrics == nil || *r.Metrics.MemoryBytes != 17391616 {
 		t.Errorf("redis metrics: %+v", r.Metrics)
 	}
+	if r.StartedAt == nil || r.StartedAt.Unix() != 1786213497 || r.Restarts == nil || *r.Restarts != 2 {
+		t.Errorf("redis uptime: %v %v", r.StartedAt, r.Restarts)
+	}
 }
 
 func TestDoRoutesBySource(t *testing.T) {
@@ -123,4 +127,52 @@ func TestDoSkipsStats(t *testing.T) {
 	if f.Called(statsCmd) {
 		t.Fatal("validating an action should not run podman stats")
 	}
+}
+
+// Shaped like `podman auto-update --dry-run --format json` (podman 5).
+const autoUpdateOutput = `[
+  {"Unit": "jellyfin.service", "Container": "aaa (systemd-jellyfin)", "ContainerName": "systemd-jellyfin",
+   "ContainerID": "aaa", "Image": "docker.io/jellyfin/jellyfin:latest", "Policy": "registry", "Updated": "pending"},
+  {"Unit": "redis.service", "Container": "ccc (redis)", "ContainerName": "redis",
+   "ContainerID": "ccc", "Image": "docker.io/library/redis:7", "Policy": "registry", "Updated": "false"}
+]`
+
+func TestUpdateChecks(t *testing.T) {
+	f := newFake()
+	f.Responses["podman auto-update --dry-run --format json"] = autoUpdateOutput
+	p := newProvider(t, f)
+	ctx := context.Background()
+	if err := p.CheckUpdates(ctx); err != nil {
+		t.Fatal(err)
+	}
+	svcs, err := p.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range svcs {
+		want := s.ID == "jellyfin.service" // only the pending one
+		if s.UpdateAvailable != want {
+			t.Errorf("%s/%s: UpdateAvailable=%v", s.Source, s.ID, s.UpdateAvailable)
+		}
+	}
+
+	// No auto-update-enabled containers: empty output, no updates.
+	if set, err := parseAutoUpdate([]byte("\n")); err != nil || len(set.units) != 0 {
+		t.Fatalf("empty output: %v %v", set, err)
+	}
+}
+
+func TestFollowLogsValidates(t *testing.T) {
+	f := newFake()
+	f.Responses["podman logs --follow --timestamps --tail 5 -- redis"] = "a\nb\n"
+	p := newProvider(t, f)
+	ctx := context.Background()
+	if _, err := p.FollowLogs(ctx, service.SourcePodman, "nope", 5); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	rc, err := p.FollowLogs(ctx, service.SourcePodman, "redis", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Close()
 }

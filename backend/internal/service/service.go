@@ -5,6 +5,8 @@ package service
 import (
 	"context"
 	"errors"
+	"io"
+	"time"
 )
 
 // Source identifies where a service comes from.
@@ -60,6 +62,14 @@ type Service struct {
 	URL string `json:"url,omitempty"`
 	// Address is the service's primary IP, shown as text (incus instances).
 	Address string `json:"address,omitempty"`
+	// StartedAt is when the service last started; set only while running.
+	StartedAt *time.Time `json:"startedAt,omitempty"`
+	// Restarts counts automatic restarts (systemd NRestarts, podman's
+	// restart policy); nil if the source doesn't track them.
+	Restarts *int `json:"restarts,omitempty"`
+	// UpdateAvailable means a newer image exists in the registry (podman
+	// auto-update dry run).
+	UpdateAvailable bool `json:"updateAvailable,omitempty"`
 }
 
 // Provider is implemented by each service source.
@@ -73,6 +83,13 @@ type Provider interface {
 	// API is unauthenticated, so src/id come straight from the client.
 	Do(ctx context.Context, src Source, id string, action Action) error
 	Logs(ctx context.Context, src Source, id string, lines int) ([]string, error)
+}
+
+// LogFollower is implemented by providers that can stream logs live. The
+// stream starts with the last `lines` lines, then follows; closing it stops
+// the underlying command. It must validate src/id like Logs does.
+type LogFollower interface {
+	FollowLogs(ctx context.Context, src Source, id string, lines int) (io.ReadCloser, error)
 }
 
 // Find returns the service with the given source and id, or ErrNotFound.

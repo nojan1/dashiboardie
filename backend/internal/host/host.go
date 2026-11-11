@@ -18,7 +18,13 @@ import (
 )
 
 type Stats struct {
-	Hostname    string       `json:"hostname"`
+	Hostname string `json:"hostname"`
+	// UptimeSeconds is the time since boot.
+	UptimeSeconds float64 `json:"uptimeSeconds"`
+	// Reboot is nil when the host isn't NixOS.
+	Reboot *Reboot `json:"reboot,omitempty"`
+	// History is nil unless sampling was started with Start.
+	History     *History     `json:"history,omitempty"`
 	CPU         CPU          `json:"cpu"`
 	Memory      Memory       `json:"memory"`
 	Filesystems []Filesystem `json:"filesystems"`
@@ -67,9 +73,18 @@ type Reader struct {
 	ProcRoot string
 	// Statfs defaults to syscall.Statfs.
 	Statfs func(path string, st *syscall.Statfs_t) error
+	// RunRoot defaults to /run (for /run/booted-system and /run/current-system).
+	RunRoot string
 
 	mu      sync.Mutex
 	prevCPU *cpuTimes
+	// Set while the background sampler runs (see Start); Read then reports
+	// the sampled CPU % instead of diffing against the previous request.
+	sampling  bool
+	latestCPU *float64
+	history   []Point
+	interval  time.Duration
+	keep      int
 }
 
 func (r *Reader) proc(name string) string {
@@ -84,6 +99,9 @@ func (r *Reader) Read(ctx context.Context) (Stats, error) {
 	var s Stats
 	var err error
 	s.Hostname, _ = os.Hostname()
+	s.UptimeSeconds = r.uptime()
+	s.Reboot = r.reboot()
+	s.History = r.historySnapshot()
 	if s.CPU, err = r.readCPU(ctx); err != nil {
 		return s, err
 	}
@@ -106,6 +124,11 @@ func (r *Reader) readCPU(ctx context.Context) (CPU, error) {
 		return CPU{}, err
 	}
 	r.mu.Lock()
+	if r.sampling {
+		pct := r.latestCPU
+		r.mu.Unlock()
+		return CPU{Percent: pct, Cores: cores, Load: r.loadAvg()}, nil
+	}
 	prev := r.prevCPU
 	r.prevCPU = &cur
 	r.mu.Unlock()

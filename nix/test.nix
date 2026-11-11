@@ -26,6 +26,27 @@ pkgs.testers.runNixOSTest {
       enable = true;
       systemdUnits = [ "hello" ];
       systemdUnitUrls.hello = "https://hello.example.com";
+      systemdTimers = [
+        "tick"
+        "missing"
+      ];
+    };
+
+    systemd.services.tick = {
+      serviceConfig.Type = "oneshot";
+      script = "echo tick ran";
+    };
+    systemd.timers.tick = {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnActiveSec = "2s";
+        OnUnitActiveSec = "1h";
+      };
+    };
+    systemd.services.broken = {
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig.Type = "oneshot";
+      script = "echo boom; exit 3";
     };
 
     virtualisation.podman.enable = true;
@@ -81,6 +102,62 @@ pkgs.testers.runNixOSTest {
         res = services()
         assert find(res, "systemd", "hello.service")["url"] == "https://hello.example.com", res
         assert find(res, "quadlet", "web.service")["url"] == "http://web.home", res
+
+    with subtest("uptime and restart counts"):
+        res = services()
+        hello = find(res, "systemd", "hello.service")
+        assert hello["startedAt"] and hello["restarts"] == 0, hello
+        assert find(res, "quadlet", "web.service")["startedAt"], res
+
+    with subtest("failed units are reported and their logs readable"):
+        machine.wait_until_succeeds(
+            "curl -sf http://127.0.0.1:8080/api/units | jq -e '.failed | map(.unit) | index(\"broken.service\")'"
+        )
+        machine.succeed(
+            "curl -sf 'http://127.0.0.1:8080/api/units/broken.service/logs?lines=20'"
+            " | jq -e '.lines | map(select(contains(\"boom\"))) | length > 0'"
+        )
+        # Only failed units and configured timers are readable.
+        code = machine.succeed(
+            "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/units/not-listed.service/logs"
+        )
+        assert code == "404", code
+
+    with subtest("timers show last run, result and next run"):
+        machine.wait_until_succeeds(
+            "curl -sf http://127.0.0.1:8080/api/units"
+            " | jq -e '.timers[] | select(.name == \"tick\") | .lastRun and .nextRun and .result == \"success\"'"
+        )
+        timers = json.loads(machine.succeed("curl -sf http://127.0.0.1:8080/api/units"))["timers"]
+        assert [t["name"] for t in timers] == ["tick", "missing"], timers
+        assert timers[1]["found"] is False, timers
+        machine.succeed(
+            "curl -sf 'http://127.0.0.1:8080/api/units/tick.service/logs?lines=20'"
+            " | jq -e '.lines | map(select(contains(\"tick ran\"))) | length > 0'"
+        )
+
+    with subtest("no reboot pending, history is sampled"):
+        h = json.loads(machine.succeed("curl -sf http://127.0.0.1:8080/api/host"))
+        assert h["reboot"] is not None and h["reboot"]["required"] is False, h["reboot"]
+        assert h["uptimeSeconds"] > 0, h
+        machine.wait_until_succeeds(
+            "curl -sf http://127.0.0.1:8080/api/host | jq -e '.history.points | length >= 1'"
+        )
+
+    with subtest("logs can be followed live"):
+        machine.succeed(
+            "(timeout 8 curl -sN 'http://127.0.0.1:8080/api/services/systemd/hello.service/logs/follow?lines=1'"
+            " > /tmp/follow || true) & sleep 3; systemctl restart hello; wait"
+        )
+        out = machine.succeed("cat /tmp/follow")
+        # The backlog line plus what the restart logged.
+        assert out.count("data: ") >= 3 and out.count("hello from the test unit") >= 1, out
+        code = machine.succeed(
+            "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/services/systemd/not-listed.service/logs/follow"
+        )
+        assert code == "404", code
+        # The journalctl started for the stream must be gone again.
+        machine.fail("pgrep -f 'journalctl.*-f -u hello.service'")
 
     with subtest("listing is fast"):
         # Regression: list-unit-files made this take >10s on small VMs.

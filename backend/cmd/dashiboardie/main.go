@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
+	"time"
 
 	"dashiboardie/internal/api"
 	"dashiboardie/internal/execx"
@@ -18,6 +21,7 @@ import (
 	"dashiboardie/internal/providers/systemd"
 	"dashiboardie/internal/service"
 	"dashiboardie/internal/systemctl"
+	"dashiboardie/internal/units"
 	"dashiboardie/internal/web"
 )
 
@@ -25,20 +29,30 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "listen address")
 	static := flag.String("static", "", "directory with the built frontend to serve (e.g. ../frontend/dist)")
 	useMock := flag.Bool("mock", false, "use fake in-memory providers instead of the real sources")
-	units := flag.String("systemd-units", "", "comma-separated systemd units to show, each optionally with a link: nginx,jellyfin=https://jellyfin.example.com")
+	unitList := flag.String("systemd-units", "", "comma-separated systemd units to show, each optionally with a link: nginx,jellyfin=https://jellyfin.example.com")
 	nixosDir := flag.String("nixos-containers-dir", nixos.DefaultConfigDir, "directory with NixOS container configs")
+	timers := flag.String("systemd-timers", "", "comma-separated systemd timers to show with their last and next run: backup,nix-gc")
+	updateEvery := flag.Duration("update-check-interval", 6*time.Hour, "how often to check registries for newer podman images (podman auto-update --dry-run); 0 disables")
 	flag.Parse()
 
+	ctx := context.Background()
 	var providers []service.Provider
+	var unitSource units.Source
 	if *useMock {
 		providers = mock.All()
+		unitSource = mock.Units{}
 	} else {
-		providers = realProviders(splitList(*units), *nixosDir)
+		providers = realProviders(ctx, splitList(*unitList), *nixosDir, *updateEvery)
+		unitSource = units.New(&systemctl.Client{Run: execx.Exec{}}, splitList(*timers))
 	}
 
+	// Host stats are always real, even with -mock. Sample every 10s and keep
+	// an hour for the graphs.
+	hostReader := &host.Reader{}
+	hostReader.Start(ctx, 10*time.Second, 360)
+
 	mux := http.NewServeMux()
-	// Host stats are always real, even with -mock.
-	api.New(service.NewRegistry(providers...), &host.Reader{}).Register(mux)
+	api.New(service.NewRegistry(providers...), hostReader, unitSource).Register(mux)
 	if *static != "" {
 		mux.Handle("/", web.Handler(*static))
 	}
@@ -50,7 +64,7 @@ func main() {
 	}
 }
 
-func realProviders(units []string, nixosDir string) []service.Provider {
+func realProviders(ctx context.Context, unitSpecs []string, nixosDir string, updateEvery time.Duration) []service.Provider {
 	run := execx.Exec{}
 	system := &systemctl.Client{Run: run}
 	// Podman is per-user: rootful when running as root, otherwise rootless,
@@ -65,9 +79,13 @@ func realProviders(units []string, nixosDir string) []service.Provider {
 		}
 		providers = append(providers, p)
 	}
-	add("systemctl", systemd.New(system, units))
+	add("systemctl", systemd.New(system, unitSpecs))
 	add("systemctl", nixos.New(system, nixosDir))
-	add("podman", podman.New(run, podmanSC))
+	pm := podman.New(run, podmanSC)
+	add("podman", pm)
+	if updateEvery > 0 && slices.Contains(providers, service.Provider(pm)) {
+		pm.StartUpdateChecks(ctx, updateEvery)
+	}
 	add("incus", incus.New(run))
 	return providers
 }

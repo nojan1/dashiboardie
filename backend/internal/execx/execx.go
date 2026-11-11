@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 type Runner interface {
@@ -16,6 +18,11 @@ type Runner interface {
 	Output(ctx context.Context, name string, args ...string) ([]byte, error)
 	// Combined returns stdout and stderr interleaved (for logs).
 	Combined(ctx context.Context, name string, args ...string) ([]byte, error)
+	// Stream starts a long-running command (e.g. `journalctl -f`) and returns
+	// its interleaved stdout and stderr. Closing the reader, or ctx ending,
+	// kills the command. When the command exits by itself, reads return
+	// io.EOF, or an *Error if it failed.
+	Stream(ctx context.Context, name string, args ...string) (io.ReadCloser, error)
 }
 
 // Exec runs real commands.
@@ -38,6 +45,41 @@ func (Exec) Combined(ctx context.Context, name string, args ...string) ([]byte, 
 		return out, cmdError(name, args, err, "")
 	}
 	return out, nil
+}
+
+func (Exec) Stream(ctx context.Context, name string, args ...string) (io.ReadCloser, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	cmd := exec.CommandContext(ctx, name, args...)
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	// Don't let a child that inherited the pipe keep Wait blocked.
+	cmd.WaitDelay = time.Second
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, cmdError(name, args, err, "")
+	}
+	go func() {
+		err := cmd.Wait()
+		if err != nil && ctx.Err() == nil {
+			err = cmdError(name, args, err, "")
+		} else {
+			err = io.EOF
+		}
+		pw.CloseWithError(err)
+		cancel()
+	}()
+	return &stream{PipeReader: pr, cancel: cancel}, nil
+}
+
+type stream struct {
+	*io.PipeReader
+	cancel context.CancelFunc
+}
+
+func (s *stream) Close() error {
+	s.cancel()
+	return s.PipeReader.Close()
 }
 
 // Error is returned when a command fails. ExitCode is -1 if the command

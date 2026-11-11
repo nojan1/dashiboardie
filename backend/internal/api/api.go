@@ -11,15 +11,17 @@ import (
 
 	"dashiboardie/internal/host"
 	"dashiboardie/internal/service"
+	"dashiboardie/internal/units"
 )
 
 type Server struct {
-	reg  *service.Registry
-	host *host.Reader
+	reg   *service.Registry
+	host  *host.Reader
+	units units.Source
 }
 
-func New(reg *service.Registry, hostReader *host.Reader) *Server {
-	return &Server{reg: reg, host: hostReader}
+func New(reg *service.Registry, hostReader *host.Reader, u units.Source) *Server {
+	return &Server{reg: reg, host: hostReader, units: u}
 }
 
 // Register mounts the API routes on mux.
@@ -28,6 +30,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/services", s.listServices)
 	mux.HandleFunc("POST /api/services/{source}/{id}/{action}", s.doAction)
 	mux.HandleFunc("GET /api/services/{source}/{id}/logs", s.logs)
+	mux.HandleFunc("GET /api/services/{source}/{id}/logs/follow", s.followLogs)
+	mux.HandleFunc("GET /api/units", s.unitsOverview)
+	mux.HandleFunc("GET /api/units/{unit}/logs", s.unitLogs)
+	mux.HandleFunc("GET /api/units/{unit}/logs/follow", s.followUnitLogs)
 }
 
 func (s *Server) hostStats(w http.ResponseWriter, r *http.Request) {
@@ -75,14 +81,9 @@ func (s *Server) doAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
-	lines := 200
-	if v := r.URL.Query().Get("lines"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			writeError(w, http.StatusBadRequest, errors.New("invalid lines"))
-			return
-		}
-		lines = n
+	lines, ok := linesParam(w, r)
+	if !ok {
+		return
 	}
 	src := service.Source(r.PathValue("source"))
 	out, err := s.reg.Logs(r.Context(), src, r.PathValue("id"), lines)
@@ -90,10 +91,7 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, statusFor(err), err)
 		return
 	}
-	if out == nil {
-		out = []string{}
-	}
-	writeJSON(w, http.StatusOK, map[string][]string{"lines": out})
+	writeLines(w, out)
 }
 
 func statusFor(err error) int {
@@ -117,4 +115,76 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+const maxLines = 10000
+
+// linesParam reads ?lines=N (default 200); on a bad value it writes a 400.
+func linesParam(w http.ResponseWriter, r *http.Request) (int, bool) {
+	v := r.URL.Query().Get("lines")
+	if v == "" {
+		return 200, true
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 || n > maxLines {
+		writeError(w, http.StatusBadRequest, errors.New("invalid lines"))
+		return 0, false
+	}
+	return n, true
+}
+
+func writeLines(w http.ResponseWriter, lines []string) {
+	if lines == nil {
+		lines = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string][]string{"lines": lines})
+}
+
+func (s *Server) followLogs(w http.ResponseWriter, r *http.Request) {
+	lines, ok := linesParam(w, r)
+	if !ok {
+		return
+	}
+	src := service.Source(r.PathValue("source"))
+	rc, err := s.reg.FollowLogs(r.Context(), src, r.PathValue("id"), lines)
+	if err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+	streamLines(w, r, rc)
+}
+
+func (s *Server) unitsOverview(w http.ResponseWriter, r *http.Request) {
+	ov, err := s.units.Overview(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ov)
+}
+
+func (s *Server) unitLogs(w http.ResponseWriter, r *http.Request) {
+	lines, ok := linesParam(w, r)
+	if !ok {
+		return
+	}
+	out, err := s.units.Logs(r.Context(), r.PathValue("unit"), lines)
+	if err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+	writeLines(w, out)
+}
+
+func (s *Server) followUnitLogs(w http.ResponseWriter, r *http.Request) {
+	lines, ok := linesParam(w, r)
+	if !ok {
+		return
+	}
+	rc, err := s.units.FollowLogs(r.Context(), r.PathValue("unit"), lines)
+	if err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+	streamLines(w, r, rc)
 }

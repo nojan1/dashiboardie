@@ -17,6 +17,9 @@ export interface Service {
   unit?: string
   url?: string
   address?: string
+  startedAt?: string // RFC 3339; only while running
+  restarts?: number
+  updateAvailable?: boolean
 }
 
 export interface ProviderError {
@@ -46,12 +49,52 @@ export const listServices = () => request<ServiceList>('/api/services')
 export const runAction = (s: Service, action: Action) =>
   request<void>(`${servicePath(s)}/${action}`, { method: 'POST' })
 
-export const fetchLogs = (s: Service, lines = 200) =>
-  request<{ lines: string[] }>(`${servicePath(s)}/logs?lines=${lines}`).then((r) => r.lines)
+// Something whose logs can be shown: a service or a host-level unit.
+// `path` is the logs endpoint; `${path}/follow` streams it (SSE).
+export interface LogTarget {
+  title: string
+  subtitle: string
+  path: string
+  // incus console logs can't be followed.
+  canFollow: boolean
+}
+
+export const serviceLogs = (s: Service): LogTarget => ({
+  title: s.name,
+  subtitle: `${s.source} logs`,
+  path: `${servicePath(s)}/logs`,
+  canFollow: s.source !== 'incus',
+})
+
+export const unitLogs = (unit: string): LogTarget => ({
+  title: unit,
+  subtitle: 'journal',
+  path: `/api/units/${encodeURIComponent(unit)}/logs`,
+  canFollow: true,
+})
+
+export const fetchLogs = (t: LogTarget, lines = 200) =>
+  request<{ lines: string[] }>(`${t.path}?lines=${lines}`).then((r) => r.lines)
+
+export const followUrl = (t: LogTarget, lines = 200) => `${t.path}/follow?lines=${lines}`
 
 // Mirrors backend/internal/host.
+export interface HistoryPoint {
+  t: number // unix seconds
+  cpu: number | null
+  mem: number
+}
+
 export interface HostStats {
   hostname: string
+  uptimeSeconds: number
+  reboot?: {
+    required: boolean
+    changed: string[]
+    bootedKernel: string
+    currentKernel: string
+  }
+  history?: { intervalSeconds: number; windowSeconds: number; points: HistoryPoint[] }
   cpu: { percent: number | null; cores: number; load: number[] | null }
   memory: { totalBytes: number; usedBytes: number; swapTotalBytes: number; swapUsedBytes: number }
   filesystems: {
@@ -66,3 +109,30 @@ export interface HostStats {
 }
 
 export const fetchHost = () => request<HostStats>('/api/host')
+
+// Mirrors backend/internal/units.
+export interface FailedUnit {
+  unit: string
+  description: string
+}
+
+export interface Timer {
+  name: string
+  unit: string
+  description?: string
+  service?: string
+  found: boolean
+  active: boolean
+  lastRun?: string
+  nextRun?: string
+  running: boolean
+  result?: string
+  exitStatus?: number
+}
+
+export interface UnitsOverview {
+  failed: FailedUnit[]
+  timers: Timer[]
+}
+
+export const fetchUnits = () => request<UnitsOverview>('/api/units')

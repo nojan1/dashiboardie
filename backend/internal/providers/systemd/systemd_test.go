@@ -10,7 +10,7 @@ import (
 	"dashiboardie/internal/systemctl"
 )
 
-const show = "systemctl show --no-pager -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec -- nginx.service backup.service"
+const show = "systemctl show --no-pager --timestamp=unix -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec,ActiveEnterTimestamp,NRestarts -- nginx.service backup.service"
 
 func TestList(t *testing.T) {
 	f := &execx.Fake{Responses: map[string]string{show: `Id=nginx.service
@@ -18,12 +18,16 @@ LoadState=loaded
 ActiveState=active
 MemoryCurrent=1024
 CPUUsageNSec=5
+ActiveEnterTimestamp=@1794224123
+NRestarts=3
 
 Id=backup.service
 LoadState=loaded
 ActiveState=failed
 MemoryCurrent=[not set]
 CPUUsageNSec=[not set]
+ActiveEnterTimestamp=
+NRestarts=0
 `}}
 	// "nginx" without a suffix is normalized to nginx.service.
 	p := New(&systemctl.Client{Run: f}, []string{"nginx", "backup.service"})
@@ -36,6 +40,13 @@ CPUUsageNSec=[not set]
 	}
 	if svcs[0].Name != "nginx" || svcs[0].Status != service.StatusRunning || svcs[0].Metrics == nil {
 		t.Errorf("nginx: %+v", svcs[0])
+	}
+	if svcs[0].StartedAt == nil || svcs[0].StartedAt.Unix() != 1794224123 || svcs[0].Restarts == nil || *svcs[0].Restarts != 3 {
+		t.Errorf("nginx uptime: %v %v", svcs[0].StartedAt, svcs[0].Restarts)
+	}
+	// Not running: no start time, but the restart count is still reported.
+	if svcs[1].StartedAt != nil || svcs[1].Restarts == nil {
+		t.Errorf("backup uptime: %v %v", svcs[1].StartedAt, svcs[1].Restarts)
 	}
 	if svcs[1].Status != service.StatusFailed || svcs[1].Metrics != nil {
 		t.Errorf("backup: %+v", svcs[1])
@@ -61,7 +72,7 @@ func TestDoRejectsUnlistedUnits(t *testing.T) {
 }
 
 func TestURLsAndAliases(t *testing.T) {
-	cmd := "systemctl show --no-pager -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec -- jellyfin.service dbus.service"
+	cmd := "systemctl show --no-pager --timestamp=unix -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec,ActiveEnterTimestamp,NRestarts -- jellyfin.service dbus.service"
 	f := &execx.Fake{Responses: map[string]string{
 		// dbus.service is an alias; systemd reports the canonical unit.
 		cmd: "Id=jellyfin.service\nActiveState=active\n\nId=dbus-broker.service\nActiveState=active\n",

@@ -6,6 +6,7 @@ package nixos
 
 import (
 	"context"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -67,14 +68,16 @@ func (p *Provider) List(ctx context.Context) ([]service.Service, error) {
 	out := make([]service.Service, 0, len(names))
 	for _, name := range names {
 		u := byUnit[unitFor(name)]
-		out = append(out, service.Service{
+		s := service.Service{
 			ID:      name,
 			Source:  service.SourceNixOS,
 			Name:    name,
 			Status:  u.Status(),
 			Metrics: p.sc.Metrics(u),
 			Unit:    unitFor(name),
-		})
+		}
+		s.StartedAt, s.Restarts = u.Uptime()
+		out = append(out, s)
 	}
 	return out, nil
 }
@@ -106,4 +109,12 @@ func (p *Provider) Logs(ctx context.Context, _ service.Source, id string, lines 
 		return nil, err
 	}
 	return p.sc.Journal(ctx, unit, lines)
+}
+
+func (p *Provider) FollowLogs(ctx context.Context, _ service.Source, id string, lines int) (io.ReadCloser, error) {
+	unit, err := p.unit(id)
+	if err != nil {
+		return nil, err
+	}
+	return p.sc.FollowJournal(ctx, unit, lines)
 }

@@ -6,6 +6,7 @@ package mock
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -20,6 +21,11 @@ type Provider struct {
 
 func ptr[T any](v T) *T { return &v }
 
+func ago(d time.Duration) *time.Time {
+	t := time.Now().Add(-d).Truncate(time.Second)
+	return &t
+}
+
 func metrics(cpu float64, memMiB uint64) *service.Metrics {
 	return &service.Metrics{CPUPercent: ptr(cpu), MemoryBytes: ptr(memMiB << 20)}
 }
@@ -28,22 +34,22 @@ func metrics(cpu float64, memMiB uint64) *service.Metrics {
 func All() []service.Provider {
 	return []service.Provider{
 		newProvider(service.SourceQuadlet,
-			service.Service{ID: "jellyfin", Name: "jellyfin", Status: service.StatusRunning, Unit: "jellyfin.service", Metrics: metrics(3.2, 512), URL: "https://jellyfin.example.com"},
+			service.Service{ID: "jellyfin", Name: "jellyfin", Status: service.StatusRunning, Unit: "jellyfin.service", Metrics: metrics(3.2, 512), URL: "https://jellyfin.example.com", StartedAt: ago(26 * time.Hour), Restarts: ptr(0), UpdateAvailable: true},
 		),
 		newProvider(service.SourcePodman,
-			service.Service{ID: "redis", Name: "redis", Status: service.StatusRunning, Metrics: metrics(0.4, 24)},
-			service.Service{ID: "bazarr", Name: "bazarr", Status: service.StatusRunning, Metrics: metrics(1.1, 180), URL: "http://bazarr.home"},
+			service.Service{ID: "redis", Name: "redis", Status: service.StatusRunning, Metrics: metrics(0.4, 24), StartedAt: ago(9 * 24 * time.Hour), Restarts: ptr(0)},
+			service.Service{ID: "bazarr", Name: "bazarr", Status: service.StatusRunning, Metrics: metrics(1.1, 180), URL: "http://bazarr.home", StartedAt: ago(14 * time.Minute), Restarts: ptr(4)},
 		),
 		newProvider(service.SourceIncus,
 			service.Service{ID: "dev-vm", Name: "dev-vm", Status: service.StatusStopped},
-			service.Service{ID: "homeassistant", Name: "homeassistant", Status: service.StatusRunning, Address: "192.168.1.104"},
+			service.Service{ID: "homeassistant", Name: "homeassistant", Status: service.StatusRunning, Address: "192.168.1.104", StartedAt: ago(41 * 24 * time.Hour)},
 		),
 		newProvider(service.SourceNixOS,
-			service.Service{ID: "builder", Name: "builder", Status: service.StatusRunning},
+			service.Service{ID: "builder", Name: "builder", Status: service.StatusRunning, StartedAt: ago(3 * time.Hour), Restarts: ptr(0)},
 		),
 		newProvider(service.SourceSystemd,
-			service.Service{ID: "nginx.service", Name: "nginx", Status: service.StatusRunning, Unit: "nginx.service", URL: "https://nginx.example.com/status"},
-			service.Service{ID: "backup.service", Name: "backup", Status: service.StatusFailed, Unit: "backup.service"},
+			service.Service{ID: "nginx.service", Name: "nginx", Status: service.StatusRunning, Unit: "nginx.service", URL: "https://nginx.example.com/status", StartedAt: ago(5*24*time.Hour + 3*time.Hour), Restarts: ptr(0)},
+			service.Service{ID: "backup.service", Name: "backup", Status: service.StatusFailed, Unit: "backup.service", Restarts: ptr(0)},
 			// Duplicate of the Quadlet above; the registry should hide it.
 			service.Service{ID: "jellyfin.service", Name: "jellyfin", Status: service.StatusRunning, Unit: "jellyfin.service"},
 		),
@@ -92,4 +98,38 @@ func (p *Provider) Logs(ctx context.Context, _ service.Source, id string, lines 
 		out[i] = fmt.Sprintf("%s %s: mock log line %d", ts, id, i+1)
 	}
 	return out, nil
+}
+
+// FollowLogs emits the backlog, then a new line every second.
+func (p *Provider) FollowLogs(ctx context.Context, src service.Source, id string, lines int) (io.ReadCloser, error) {
+	backlog, err := p.Logs(ctx, src, id, lines)
+	if err != nil {
+		return nil, err
+	}
+	return fakeStream(ctx, id, backlog), nil
+}
+
+func fakeStream(ctx context.Context, name string, backlog []string) io.ReadCloser {
+	pr, pw := io.Pipe()
+	go func() {
+		for _, l := range backlog {
+			if _, err := fmt.Fprintln(pw, l); err != nil {
+				return
+			}
+		}
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for i := 1; ; i++ {
+			select {
+			case <-ctx.Done():
+				pw.Close()
+				return
+			case now := <-tick.C:
+				if _, err := fmt.Fprintf(pw, "%s %s: live line %d\n", now.Format(time.RFC3339), name, i); err != nil {
+					return // reader closed
+				}
+			}
+		}
+	}()
+	return pr
 }

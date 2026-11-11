@@ -3,6 +3,7 @@ package execx
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 )
@@ -48,4 +49,13 @@ func (f *Fake) Called(line string) bool {
 		}
 	}
 	return false
+}
+
+// Stream returns the canned response as a stream that ends after it.
+func (f *Fake) Stream(_ context.Context, name string, args ...string) (io.ReadCloser, error) {
+	out, err := f.run(name, args)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(strings.NewReader(string(out))), nil
 }

@@ -4,6 +4,7 @@ import type { HostStats } from '../api'
 import { formatBytes } from '../format'
 import UsageFlag from './UsageFlag.vue'
 import UsageMeter from './UsageMeter.vue'
+import Sparkline from './Sparkline.vue'
 
 const props = defineProps<{ stats: HostStats | null; error: string }>()
 
@@ -20,6 +21,10 @@ const filesystems = computed(() =>
 )
 
 const fmtPct = (n: number | null) => (n == null ? '—' : `${Math.round(n)}%`)
+
+const history = computed(() => props.stats?.history)
+const cpuHistory = computed(() => (history.value?.points ?? []).map((p) => ({ t: p.t, v: p.cpu })))
+const memHistory = computed(() => (history.value?.points ?? []).map((p) => ({ t: p.t, v: p.mem })))
 </script>
 
 <template>
@@ -30,6 +35,7 @@ const fmtPct = (n: number | null) => (n == null ? '—' : `${Math.round(n)}%`)
       <h2>CPU</h2>
       <p class="figure">{{ fmtPct(stats?.cpu.percent ?? null) }} <UsageFlag :percent="stats?.cpu.percent ?? null" /></p>
       <UsageMeter :percent="stats?.cpu.percent ?? null" label="CPU usage" />
+      <Sparkline v-if="history" :points="cpuHistory" :window-seconds="history.windowSeconds" label="CPU" />
       <p class="detail" v-if="stats">
         {{ stats.cpu.cores }} cores
         <template v-if="stats.cpu.load?.length">· load {{ stats.cpu.load.map((l) => l.toFixed(2)).join(' ') }}</template>
@@ -40,6 +46,7 @@ const fmtPct = (n: number | null) => (n == null ? '—' : `${Math.round(n)}%`)
       <h2>Memory</h2>
       <p class="figure">{{ fmtPct(memPercent) }} <UsageFlag :percent="memPercent" /></p>
       <UsageMeter :percent="memPercent" label="Memory usage" />
+      <Sparkline v-if="history" :points="memHistory" :window-seconds="history.windowSeconds" label="Memory" />
       <p class="detail" v-if="stats">
         {{ formatBytes(stats.memory.usedBytes) }} of {{ formatBytes(stats.memory.totalBytes) }}
         <template v-if="stats.memory.swapTotalBytes > 0">

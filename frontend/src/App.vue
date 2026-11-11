@@ -2,16 +2,23 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   fetchHost,
+  fetchUnits,
   listServices,
   runAction,
+  serviceLogs,
+  unitLogs,
   type Action,
   type HostStats,
+  type LogTarget,
   type ProviderError,
   type Service,
+  type UnitsOverview,
 } from './api'
-import { formatBytes, formatPercent } from './format'
+import { formatBytes, formatDuration, formatPercent, secondsSince } from './format'
+import FailedUnits from './components/FailedUnits.vue'
 import HostSummary from './components/HostSummary.vue'
 import LogsModal from './components/LogsModal.vue'
+import TimersTable from './components/TimersTable.vue'
 
 const REFRESH_MS = 10_000
 
@@ -22,10 +29,15 @@ const search = ref('')
 const sourceFilter = ref('')
 const statusFilter = ref('')
 const busy = ref<Set<string>>(new Set())
-const selected = ref<Service | null>(null)
+const logTarget = ref<LogTarget | null>(null)
+const selectedKey = ref('') // service row highlighted while its logs are open
 const host = ref<HostStats | null>(null)
 const hostError = ref('')
 const loaded = ref(false)
+const units = ref<UnitsOverview | null>(null)
+const unitsError = ref('')
+// Relative times ("3h ago") are computed against this; updated each refresh.
+const now = ref(Date.now())
 
 const key = (s: Service) => `${s.source}/${s.id}`
 
@@ -79,7 +91,38 @@ async function refreshHost() {
   }
 }
 
-const refresh = () => Promise.all([refreshServices(), refreshHost()])
+async function refreshUnits() {
+  try {
+    units.value = await fetchUnits()
+    unitsError.value = ''
+  } catch (e) {
+    unitsError.value = (e as Error).message
+  }
+}
+
+const refresh = () => {
+  now.value = Date.now()
+  return Promise.all([refreshServices(), refreshHost(), refreshUnits()])
+}
+
+function showServiceLogs(s: Service) {
+  selectedKey.value = key(s)
+  logTarget.value = serviceLogs(s)
+}
+
+function showUnitLogs(unit: string) {
+  selectedKey.value = ''
+  logTarget.value = unitLogs(unit)
+}
+
+function closeLogs() {
+  logTarget.value = null
+  selectedKey.value = ''
+}
+
+const uptime = (s: Service) => (s.startedAt ? formatDuration(secondsSince(s.startedAt, now.value)) : '')
+const restartsLabel = (n: number) => `${n} ${n === 1 ? 'restart' : 'restarts'}`
+const reboot = computed(() => (host.value?.reboot?.required ? host.value.reboot : null))
 
 async function act(s: Service, action: Action) {
   const k = key(s)
@@ -130,9 +173,24 @@ onUnmounted(() => {
 
 <template>
   <main>
-    <h1>{{ host?.hostname || 'Server' }}</h1>
+    <h1>
+      {{ host?.hostname || 'Server' }}
+      <span v-if="host" class="host-uptime">up {{ formatDuration(host.uptimeSeconds) }}</span>
+    </h1>
+
+    <p v-if="reboot" class="banner reboot">
+      <span class="icon" aria-hidden="true">▲</span>
+      <strong>Reboot required.</strong>
+      <template v-if="reboot.changed.includes('kernel') && reboot.bootedKernel !== reboot.currentKernel">
+        Running {{ reboot.bootedKernel }}; the current system has {{ reboot.currentKernel }}.
+      </template>
+      <template v-else>The current system has a new {{ reboot.changed.join(', ') }}.</template>
+    </p>
 
     <HostSummary :stats="host" :error="hostError" />
+
+    <p v-if="unitsError" class="banner warn">Could not load systemd units: {{ unitsError }}</p>
+    <FailedUnits :units="units?.failed ?? []" @logs="showUnitLogs" />
 
     <h2 class="section">Services</h2>
 
@@ -162,15 +220,21 @@ onUnmounted(() => {
             <th>Name</th>
             <th>Address</th>
             <th>Status</th>
+            <th>Uptime</th>
             <th class="num">CPU</th>
             <th class="num">Memory</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="s in filtered" :key="key(s)" :class="{ selected: selected && key(selected) === key(s) }">
+          <tr v-for="s in filtered" :key="key(s)" :class="{ selected: selectedKey === key(s) }">
             <td><span class="tag">{{ s.source }}</span></td>
-            <td>{{ s.name }}</td>
+            <td>
+              {{ s.name }}
+              <span v-if="s.updateAvailable" class="update" title="A newer image is available in the registry">
+                <span aria-hidden="true">↑</span> update
+              </span>
+            </td>
             <td class="address">
               <a v-if="safeUrl(s.url)" :href="safeUrl(s.url)" target="_blank" rel="noopener noreferrer">
                 {{ displayUrl(s.url!) }}<span class="ext" aria-hidden="true">↗</span>
@@ -179,33 +243,54 @@ onUnmounted(() => {
               <span v-else class="none">—</span>
             </td>
             <td><span class="status" :class="s.status">{{ s.status }}</span></td>
+            <td class="uptime">
+              <span v-if="s.startedAt" :title="`Since ${new Date(s.startedAt).toLocaleString()}`">{{ uptime(s) }}</span>
+              <span v-else class="none">—</span>
+              <span
+                v-if="s.restarts"
+                class="restarts"
+                :title="`${restartsLabel(s.restarts)} by the restart policy`"
+                :aria-label="restartsLabel(s.restarts)"
+              >
+                <span aria-hidden="true">↻</span>{{ s.restarts }}
+              </span>
+            </td>
             <td class="num">{{ formatPercent(s.metrics?.cpuPercent) }}</td>
             <td class="num">{{ formatBytes(s.metrics?.memoryBytes) }}</td>
             <td class="actions">
               <button :disabled="busy.has(key(s)) || s.status === 'running'" @click="act(s, 'start')">Start</button>
               <button :disabled="busy.has(key(s)) || s.status !== 'running'" @click="act(s, 'stop')">Stop</button>
               <button :disabled="busy.has(key(s))" @click="act(s, 'restart')">Restart</button>
-              <button @click="selected = s">Logs</button>
+              <button @click="showServiceLogs(s)">Logs</button>
             </td>
           </tr>
           <tr v-if="!filtered.length">
-            <td colspan="7" class="empty">{{ loaded ? 'No services match.' : 'Loading…' }}</td>
+            <td colspan="8" class="empty">{{ loaded ? 'No services match.' : 'Loading…' }}</td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <LogsModal v-if="selected" :service="selected" @close="selected = null" />
+    <TimersTable v-if="units?.timers.length" :timers="units.timers" :now="now" @logs="showUnitLogs" />
+
+    <LogsModal v-if="logTarget" :target="logTarget" @close="closeLogs" />
   </main>
 </template>
 
 <style scoped>
 main {
-  max-width: 1100px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 1.5rem 1rem;
 }
 h1 { margin: 0 0 1rem; font-size: 1.4rem; }
+.host-uptime { margin-left: 0.5rem; font-size: 0.9rem; font-weight: normal; color: var(--muted); }
+.banner.reboot {
+  margin-bottom: 1rem;
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+.reboot .icon { color: var(--warn); margin-right: 0.3rem; }
 .section { margin: 0 0 0.75rem; font-size: 1.1rem; }
 .toolbar {
   display: flex;
@@ -266,5 +351,17 @@ tr.selected td { background: color-mix(in srgb, var(--accent) 8%, transparent); 
 .status.failed::before { background: var(--bad); }
 .actions { display: flex; gap: 0.3rem; justify-content: flex-end; }
 .actions button { padding: 0.2rem 0.55rem; font-size: 0.85rem; }
+.update {
+  margin-left: 0.4rem;
+  padding: 0 0.45rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+.update span { color: var(--accent); }
+.uptime { font-variant-numeric: tabular-nums; }
+.uptime .none { color: var(--muted); }
+.restarts { margin-left: 0.5rem; font-size: 0.8rem; }
+.restarts span { color: var(--warn); }
 .empty { text-align: center; color: var(--muted); padding: 1.5rem; }
 </style>

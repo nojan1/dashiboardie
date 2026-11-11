@@ -20,7 +20,7 @@ func TestList(t *testing.T) {
 		}
 	}
 	f := &execx.Fake{Responses: map[string]string{
-		"systemctl show --no-pager -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec -- container@db.service container@web.service": `Id=container@db.service
+		"systemctl show --no-pager --timestamp=unix -p Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec,ActiveEnterTimestamp,NRestarts -- container@db.service container@web.service": `Id=container@db.service
 ActiveState=inactive
 
 Id=container@web.service

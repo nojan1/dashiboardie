@@ -28,6 +28,7 @@ type instance struct {
 	Name           string                       `json:"name"`
 	Status         string                       `json:"status"`
 	Type           string                       `json:"type"`
+	LastUsedAt     time.Time                    `json:"last_used_at"` // last start
 	Config         map[string]string            `json:"config"`
 	ExpandedDevice map[string]map[string]string `json:"expanded_devices"`
 	State          *struct {
@@ -125,6 +126,10 @@ func (p *Provider) List(ctx context.Context) ([]service.Service, error) {
 		}
 		if s.Status == service.StatusRunning {
 			s.Address = in.primaryAddress()
+			if !in.LastUsedAt.IsZero() && in.LastUsedAt.Unix() > 0 {
+				t := in.LastUsedAt.UTC()
+				s.StartedAt = &t
+			}
 		}
 		if in.State != nil && s.Status == service.StatusRunning {
 			mem := in.State.Memory.Usage

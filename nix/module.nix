@@ -62,6 +62,32 @@ in
       '';
     };
 
+    systemdTimers = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [
+        "restic-backups-daily"
+        "nix-gc"
+      ];
+      description = ''
+        systemd timers to show with their last run, its result and the next
+        run. A name without a suffix gets `.timer` added. Logs can be read
+        for these timers and the services they trigger.
+      '';
+    };
+
+    updateCheckInterval = lib.mkOption {
+      type = lib.types.str;
+      default = "6h";
+      example = "1h";
+      description = ''
+        How often to check registries for newer images of podman containers
+        and Quadlets (`podman auto-update --dry-run`), as a Go duration.
+        Only containers with an auto-update policy are checked (for
+        Quadlets, `AutoUpdate=registry`). `"0"` disables the check.
+      '';
+    };
+
     podman = lib.mkOption {
       type = lib.types.bool;
       default = config.virtualisation.podman.enable;
@@ -86,8 +112,8 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        assertion = lib.all (s: !(lib.hasInfix "," s)) unitSpecs;
-        message = "services.dashiboardie: systemd unit names and URLs must not contain commas.";
+        assertion = lib.all (s: !(lib.hasInfix "," s)) (unitSpecs ++ cfg.systemdTimers);
+        message = "services.dashiboardie: systemd unit and timer names and URLs must not contain commas.";
       }
     ];
 
@@ -113,6 +139,14 @@ in
           ++ lib.optionals (unitSpecs != [ ]) [
             "-systemd-units"
             (lib.concatStringsSep "," unitSpecs)
+          ]
+          ++ lib.optionals (cfg.systemdTimers != [ ]) [
+            "-systemd-timers"
+            (lib.concatStringsSep "," cfg.systemdTimers)
+          ]
+          ++ [
+            "-update-check-interval"
+            cfg.updateCheckInterval
           ]
           ++ cfg.extraArgs
         );

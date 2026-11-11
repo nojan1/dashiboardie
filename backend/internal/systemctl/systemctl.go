@@ -5,8 +5,10 @@ package systemctl
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -39,9 +41,14 @@ type Unit struct {
 	SourcePath   string
 	MemoryBytes  *uint64
 	CPUUsageNSec *uint64
+	// ActiveSince is when the unit last entered the active state.
+	ActiveSince *time.Time
+	// Restarts is how often systemd restarted the unit automatically
+	// (Restart=) since it was last started by hand.
+	Restarts *int
 }
 
-var showProps = "Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec"
+var showProps = "Id,Description,LoadState,ActiveState,SubState,SourcePath,MemoryCurrent,CPUUsageNSec,ActiveEnterTimestamp,NRestarts"
 
 func (c *Client) args(args ...string) []string {
 	if c.User {
@@ -52,53 +59,75 @@ func (c *Client) args(args ...string) []string {
 
 // Show returns the state of the given units, in the order requested.
 func (c *Client) Show(ctx context.Context, units ...string) ([]Unit, error) {
+	blocks, err := c.ShowProps(ctx, showProps, units...)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Unit, len(blocks))
+	for i, b := range blocks {
+		out[i] = unitFrom(b)
+	}
+	return out, nil
+}
+
+// ShowProps runs `systemctl show` for the given comma-separated properties
+// and returns one Key->Value map per unit, in the order requested.
+// Timestamps are requested as "@<unix seconds>" (see ParseTimestamp).
+func (c *Client) ShowProps(ctx context.Context, props string, units ...string) ([]map[string]string, error) {
 	if len(units) == 0 {
 		return nil, nil
 	}
-	args := c.args(append([]string{"show", "--no-pager", "-p", showProps, "--"}, units...)...)
+	args := c.args(append([]string{"show", "--no-pager", "--timestamp=unix", "-p", props, "--"}, units...)...)
 	out, err := c.Run.Output(ctx, "systemctl", args...)
 	if err != nil {
 		return nil, err
 	}
-	return parseShow(string(out)), nil
+	return parseBlocks(string(out)), nil
 }
 
-// parseShow parses `systemctl show` output: blank-line separated blocks of
+// parseBlocks parses `systemctl show` output: blank-line separated blocks of
 // Key=Value lines, one block per unit.
-func parseShow(out string) []Unit {
-	var units []Unit
+func parseBlocks(out string) []map[string]string {
+	var blocks []map[string]string
 	for _, block := range strings.Split(strings.TrimSpace(out), "\n\n") {
 		if strings.TrimSpace(block) == "" {
 			continue
 		}
-		var u Unit
+		m := map[string]string{}
 		for _, line := range strings.Split(block, "\n") {
-			k, v, ok := strings.Cut(line, "=")
-			if !ok {
-				continue
-			}
-			switch k {
-			case "Id":
-				u.ID = v
-			case "Description":
-				u.Description = v
-			case "LoadState":
-				u.LoadState = v
-			case "ActiveState":
-				u.ActiveState = v
-			case "SubState":
-				u.SubState = v
-			case "SourcePath":
-				u.SourcePath = v
-			case "MemoryCurrent":
-				u.MemoryBytes = parseUint(v)
-			case "CPUUsageNSec":
-				u.CPUUsageNSec = parseUint(v)
+			if k, v, ok := strings.Cut(line, "="); ok {
+				m[k] = v
 			}
 		}
-		units = append(units, u)
+		blocks = append(blocks, m)
+	}
+	return blocks
+}
+
+func parseShow(out string) []Unit {
+	var units []Unit
+	for _, b := range parseBlocks(out) {
+		units = append(units, unitFrom(b))
 	}
 	return units
+}
+
+func unitFrom(m map[string]string) Unit {
+	u := Unit{
+		ID:           m["Id"],
+		Description:  m["Description"],
+		LoadState:    m["LoadState"],
+		ActiveState:  m["ActiveState"],
+		SubState:     m["SubState"],
+		SourcePath:   m["SourcePath"],
+		MemoryBytes:  parseUint(m["MemoryCurrent"]),
+		CPUUsageNSec: parseUint(m["CPUUsageNSec"]),
+		ActiveSince:  ParseTimestamp(m["ActiveEnterTimestamp"]),
+	}
+	if n, err := strconv.Atoi(m["NRestarts"]); err == nil {
+		u.Restarts = &n
+	}
+	return u
 }
 
 // parseUint returns nil for "[not set]" and the 2^64-1 "infinity" sentinel.
@@ -108,6 +137,26 @@ func parseUint(v string) *uint64 {
 		return nil
 	}
 	return &n
+}
+
+// ParseTimestamp parses a `--timestamp=unix` value ("@1794224123"); an empty
+// value (never happened) gives nil.
+func ParseTimestamp(v string) *time.Time {
+	n, err := strconv.ParseInt(strings.TrimPrefix(v, "@"), 10, 64)
+	if err != nil || !strings.HasPrefix(v, "@") || n <= 0 {
+		return nil
+	}
+	t := time.Unix(n, 0).UTC()
+	return &t
+}
+
+// Uptime returns when the unit started and its automatic restart count, for
+// Service.StartedAt and Service.Restarts. StartedAt is nil unless running.
+func (u Unit) Uptime() (*time.Time, *int) {
+	if u.Status() != service.StatusRunning {
+		return nil, u.Restarts
+	}
+	return u.ActiveSince, u.Restarts
 }
 
 // GeneratedUnit is a service unit file written by a systemd generator.
@@ -197,16 +246,49 @@ func (c *Client) Do(ctx context.Context, unit string, action service.Action) err
 	return err
 }
 
-func (c *Client) Journal(ctx context.Context, unit string, lines int) ([]string, error) {
-	args := []string{"--no-pager", "-o", "short-iso", "-n", strconv.Itoa(lines), "-u", unit}
+func (c *Client) journalArgs(unit string, lines int, follow bool) []string {
+	args := []string{"--no-pager", "-o", "short-iso", "-n", strconv.Itoa(lines)}
+	if follow {
+		args = append(args, "-f")
+	}
+	args = append(args, "-u", unit)
 	if c.User {
 		args = append([]string{"--user"}, args...)
 	}
-	out, err := c.Run.Output(ctx, "journalctl", args...)
+	return args
+}
+
+func (c *Client) Journal(ctx context.Context, unit string, lines int) ([]string, error) {
+	out, err := c.Run.Output(ctx, "journalctl", c.journalArgs(unit, lines, false)...)
 	if err != nil {
 		return nil, err
 	}
 	return execx.Lines(out), nil
+}
+
+// FollowJournal streams the last `lines` journal lines of unit, then new ones.
+func (c *Client) FollowJournal(ctx context.Context, unit string, lines int) (io.ReadCloser, error) {
+	return c.Run.Stream(ctx, "journalctl", c.journalArgs(unit, lines, true)...)
+}
+
+// FailedUnit is an entry of `systemctl list-units --state=failed`.
+type FailedUnit struct {
+	Unit        string `json:"unit"`
+	Description string `json:"description"`
+}
+
+// FailedUnits lists all loaded units in the failed state. Unlike
+// list-unit-files this only walks units already in memory, so it is cheap.
+func (c *Client) FailedUnits(ctx context.Context) ([]FailedUnit, error) {
+	out, err := c.Run.Output(ctx, "systemctl", c.args("list-units", "--state=failed", "--no-pager", "-o", "json")...)
+	if err != nil {
+		return nil, err
+	}
+	var units []FailedUnit
+	if err := json.Unmarshal(out, &units); err != nil {
+		return nil, fmt.Errorf("parse list-units: %w", err)
+	}
+	return units, nil
 }
 
 // Status maps systemd's ActiveState onto the dashboard's status.

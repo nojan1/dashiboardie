@@ -5,6 +5,7 @@ package systemd
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"dashiboardie/internal/service"
@@ -62,6 +63,7 @@ func (p *Provider) List(ctx context.Context) ([]service.Service, error) {
 			s.Status = service.StatusUnknown
 		} else {
 			s.Metrics = p.sc.Metrics(u)
+			s.StartedAt, s.Restarts = u.Uptime()
 		}
 		out = append(out, s)
 	}
@@ -89,4 +91,11 @@ func (p *Provider) Logs(ctx context.Context, _ service.Source, id string, lines 
 		return nil, service.ErrNotFound
 	}
 	return p.sc.Journal(ctx, id, lines)
+}
+
+func (p *Provider) FollowLogs(ctx context.Context, _ service.Source, id string, lines int) (io.ReadCloser, error) {
+	if !p.allowed(id) {
+		return nil, service.ErrNotFound
+	}
+	return p.sc.FollowJournal(ctx, id, lines)
 }

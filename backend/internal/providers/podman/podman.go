@@ -14,8 +14,10 @@ package podman
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"dashiboardie/internal/execx"
@@ -30,6 +32,9 @@ type Provider struct {
 	run execx.Runner
 	sc  *systemctl.Client
 	cpu systemctl.CPUSampler
+
+	mu      sync.Mutex
+	updates updateSet // from the last successful CheckUpdates
 }
 
 func New(run execx.Runner, sc *systemctl.Client) *Provider {
@@ -79,17 +84,21 @@ func (p *Provider) quadlets(ctx context.Context) ([]service.Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	updates := p.currentUpdates()
 	var out []service.Service
 	for _, u := range units {
-		out = append(out, service.Service{
-			ID:      u.ID,
-			Source:  service.SourceQuadlet,
-			Name:    strings.TrimSuffix(u.ID, ".service"),
-			Status:  u.Status(),
-			Metrics: p.sc.Metrics(u),
-			Unit:    u.ID,
-			URL:     urls[u.ID],
-		})
+		s := service.Service{
+			ID:              u.ID,
+			Source:          service.SourceQuadlet,
+			Name:            strings.TrimSuffix(u.ID, ".service"),
+			Status:          u.Status(),
+			Metrics:         p.sc.Metrics(u),
+			Unit:            u.ID,
+			URL:             urls[u.ID],
+			UpdateAvailable: updates.units[u.ID],
+		}
+		s.StartedAt, s.Restarts = u.Uptime()
+		out = append(out, s)
 	}
 	return out, nil
 }
@@ -105,11 +114,13 @@ func isQuadletSource(path string) bool {
 
 // psEntry is the subset of `podman ps --format json` we use.
 type psEntry struct {
-	ID      string            `json:"Id"`
-	Names   []string          `json:"Names"`
-	State   string            `json:"State"`
-	IsInfra bool              `json:"IsInfra"`
-	Labels  map[string]string `json:"Labels"`
+	ID        string            `json:"Id"`
+	Names     []string          `json:"Names"`
+	State     string            `json:"State"`
+	IsInfra   bool              `json:"IsInfra"`
+	Labels    map[string]string `json:"Labels"`
+	StartedAt int64             `json:"StartedAt"` // unix seconds
+	Restarts  *int              `json:"Restarts"`
 }
 
 // statsEntry is `podman stats --format '{{json .ContainerStats}}'`, which
@@ -138,20 +149,27 @@ func (p *Provider) containers(ctx context.Context, quadlets []service.Service, w
 	var svcs []service.Service
 	anyRunning := false
 	ids := make(map[string]int) // container ID -> index in svcs
+	updates := p.currentUpdates()
 	for _, e := range entries {
 		if e.IsInfra || len(e.Names) == 0 || quadletUnits[e.Labels["PODMAN_SYSTEMD_UNIT"]] {
 			continue
 		}
 		s := service.Service{
-			ID:     e.Names[0],
-			Source: service.SourcePodman,
-			Name:   e.Names[0],
-			Status: containerStatus(e.State),
-			Unit:   e.Labels["PODMAN_SYSTEMD_UNIT"],
-			URL:    traefikURL(e.Labels),
+			ID:              e.Names[0],
+			Source:          service.SourcePodman,
+			Name:            e.Names[0],
+			Status:          containerStatus(e.State),
+			Unit:            e.Labels["PODMAN_SYSTEMD_UNIT"],
+			URL:             traefikURL(e.Labels),
+			Restarts:        e.Restarts,
+			UpdateAvailable: updates.containers[e.Names[0]],
 		}
 		if s.Status == service.StatusRunning {
 			anyRunning = true
+			if e.StartedAt > 0 {
+				t := time.Unix(e.StartedAt, 0).UTC()
+				s.StartedAt = &t
+			}
 		}
 		ids[e.ID] = len(svcs)
 		svcs = append(svcs, s)
@@ -241,4 +259,15 @@ func (p *Provider) Logs(ctx context.Context, src service.Source, id string, line
 		return nil, err
 	}
 	return execx.Lines(out), nil
+}
+
+func (p *Provider) FollowLogs(ctx context.Context, src service.Source, id string, lines int) (io.ReadCloser, error) {
+	s, err := p.find(ctx, src, id)
+	if err != nil {
+		return nil, err
+	}
+	if s.Source == service.SourceQuadlet {
+		return p.sc.FollowJournal(ctx, s.Unit, lines)
+	}
+	return p.run.Stream(ctx, "podman", "logs", "--follow", "--timestamps", "--tail", strconv.Itoa(lines), "--", s.ID)
 }

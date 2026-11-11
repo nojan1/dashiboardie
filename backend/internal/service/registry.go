@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 	"sync"
@@ -189,4 +190,18 @@ func (r *Registry) Logs(ctx context.Context, src Source, id string, lines int) (
 		return nil, err
 	}
 	return p.Logs(ctx, src, id, lines)
+}
+
+// FollowLogs streams a service's logs; ErrNotImplemented if its provider
+// can't follow (incus console logs).
+func (r *Registry) FollowLogs(ctx context.Context, src Source, id string, lines int) (io.ReadCloser, error) {
+	p, err := r.provider(src)
+	if err != nil {
+		return nil, err
+	}
+	f, ok := p.(LogFollower)
+	if !ok {
+		return nil, fmt.Errorf("following %s logs: %w", src, ErrNotImplemented)
+	}
+	return f.FollowLogs(ctx, src, id, lines)
 }

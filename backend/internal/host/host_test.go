@@ -2,11 +2,13 @@ package host
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // Captured from a NixOS host: /nix/store is a bind mount of the root
@@ -98,5 +100,68 @@ func TestReadCPUDiffsSuccessiveSamples(t *testing.T) {
 	fs := s.Filesystems
 	if len(fs) != 1 || fs[0].TotalBytes != 100*4096 || fs[0].UsedBytes != 60*4096 || fs[0].AvailBytes != 30*4096 {
 		t.Fatalf("filesystems: %+v", fs)
+	}
+}
+
+func TestReboot(t *testing.T) {
+	run := t.TempDir()
+	link := func(sys, name, target string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(run, sys), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(run, sys, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const old = "/nix/store/jyb28mnqm5vaxfggp513xkivabwqvkpy-linux-6.18.60/bzImage"
+	const updated = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-linux-6.18.61/bzImage"
+	link("booted-system", "kernel", old)
+	link("booted-system", "initrd", "/nix/store/x-initrd/initrd")
+	link("current-system", "kernel", old)
+	link("current-system", "initrd", "/nix/store/x-initrd/initrd")
+
+	r := &Reader{RunRoot: run}
+	if rb := r.reboot(); rb == nil || rb.Required || rb.BootedKernel != "linux-6.18.60" {
+		t.Fatalf("same system: %+v", rb)
+	}
+	os.Remove(filepath.Join(run, "current-system", "kernel"))
+	link("current-system", "kernel", updated)
+	rb := r.reboot()
+	if rb == nil || !rb.Required || strings.Join(rb.Changed, ",") != "kernel" || rb.CurrentKernel != "linux-6.18.61" {
+		t.Fatalf("new kernel: %+v", rb)
+	}
+
+	if rb := (&Reader{RunRoot: t.TempDir()}).reboot(); rb != nil {
+		t.Fatalf("not NixOS: %+v", rb)
+	}
+}
+
+func TestHistory(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("stat", "cpu  100 0 0 900 0 0 0 0\n")
+	write("meminfo", "MemTotal: 1000 kB\nMemAvailable: 750 kB\n")
+	r := &Reader{ProcRoot: dir, sampling: true, keep: 2, interval: 10 * time.Second}
+	r.sampleCPU()
+	for i, busy := range []int{200, 300, 400} {
+		write("stat", fmt.Sprintf("cpu  %d 0 0 %d 0 0 0 0\n", busy, 900+100*(i+1)))
+		r.addPoint(time.Unix(int64(i), 0))
+	}
+	h := r.historySnapshot()
+	if len(h.Points) != 2 || h.Points[0].Time != 1 || h.IntervalSeconds != 10 {
+		t.Fatalf("history: %+v", h)
+	}
+	p := h.Points[1]
+	if p.CPUPercent == nil || *p.CPUPercent != 50 || p.MemoryPercent != 25 {
+		t.Fatalf("point: cpu=%v mem=%v", p.CPUPercent, p.MemoryPercent)
+	}
+	if r.latestCPU == nil || *r.latestCPU != 50 {
+		t.Fatalf("latest cpu: %v", r.latestCPU)
 	}
 }
