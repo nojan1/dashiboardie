@@ -49,7 +49,10 @@ type Timer struct {
 	Running bool `json:"running"`
 	// Result is the triggered service's last result: "success", or
 	// systemd's failure reason ("exit-code", "signal", "timeout", ...).
-	// Empty if it never ran.
+	// Empty if it hasn't run since boot: systemd keeps a service's result
+	// in memory only, and a Persistent= timer reports a LastRun from its
+	// stamp file even when the job never ran (the stamp is created when the
+	// timer first appears).
 	Result string `json:"result,omitempty"`
 	// ExitStatus is the main process's exit code of the last run.
 	ExitStatus *int `json:"exitStatus,omitempty"`
@@ -144,9 +147,11 @@ func (w *Watcher) Timers(ctx context.Context) ([]Timer, error) {
 		}
 		state := m["ActiveState"]
 		out[i].Running = state == "active" || state == "activating" || state == "reloading"
-		// Result stays "success" for a service that never ran; only report
-		// it once there was a run.
-		if systemctl.ParseTimestamp(m["ExecMainStartTimestamp"]) != nil || out[i].LastRun != nil {
+		// systemd says Result=success for a service that never ran, so only
+		// trust it when the service started this boot. A failure result is
+		// real even without a start time (e.g. its ExecStart= didn't exist).
+		started := systemctl.ParseTimestamp(m["ExecMainStartTimestamp"]) != nil
+		if started || (m["Result"] != "" && m["Result"] != "success") {
 			out[i].Result = m["Result"]
 			if n, err := strconv.Atoi(m["ExecMainStatus"]); err == nil {
 				out[i].ExitStatus = &n

@@ -39,8 +39,9 @@ LoadState=not-found
 ActiveState=inactive
 Unit=
 `,
-		// nix-gc is monotonic and never ran: "last" is 0. Missing timers are left out.
-		scheduleCmd: `[{"next":1794449700000000,"left":1794449700000000,"last":1794384243092245,"passed":45610303736,"unit":"backup.timer","activates":"backup.service"},{"next":1794425934978599,"left":1794425934978599,"last":0,"passed":0,"unit":"nix-gc.timer","activates":"nix-gc.service"}]`,
+		// nix-gc never ran, but as a Persistent= timer it has a "last" from its
+		// stamp file (seen on a fresh NixOS install). Missing timers are left out.
+		scheduleCmd: `[{"next":1794449700000000,"left":1794449700000000,"last":1794384243092245,"passed":45610303736,"unit":"backup.timer","activates":"backup.service"},{"next":1794425934978599,"left":1794425934978599,"last":1794223028366885,"passed":0,"unit":"nix-gc.timer","activates":"nix-gc.service"}]`,
 		servicesCmd: `Id=backup.service
 ActiveState=failed
 Result=exit-code
@@ -73,8 +74,9 @@ func TestOverview(t *testing.T) {
 		b.ExitStatus == nil || *b.ExitStatus != 2 || b.LastRun == nil || b.NextRun == nil || b.Description != "Nightly backup" {
 		t.Errorf("backup: %+v", b)
 	}
-	// Never ran: no result, even though systemd says "success".
-	if g := ov.Timers[1]; g.Result != "" || g.LastRun != nil || g.NextRun == nil || g.Description != "" {
+	// Never ran: no result, even though systemd says "success" and there
+	// is a LastRun from the stamp file.
+	if g := ov.Timers[1]; g.Result != "" || g.ExitStatus != nil || g.LastRun == nil || g.NextRun == nil || g.Description != "" {
 		t.Errorf("nix-gc: %+v", g)
 	}
 	if m := ov.Timers[2]; m.Found || m.Service != "" {

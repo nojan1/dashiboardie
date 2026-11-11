@@ -263,7 +263,12 @@ func (c *Client) Journal(ctx context.Context, unit string, lines int) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	return execx.Lines(out), nil
+	all := execx.Lines(out)
+	// journalctl prints this marker instead of nothing; the UI has its own.
+	if len(all) == 1 && all[0] == "-- No entries --" {
+		return []string{}, nil
+	}
+	return all, nil
 }
 
 // FollowJournal streams the last `lines` journal lines of unit, then new ones.

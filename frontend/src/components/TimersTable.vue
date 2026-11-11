@@ -8,7 +8,9 @@ const emit = defineEmits<{ logs: [unit: string] }>()
 // A short, colour-independent summary of the last run.
 function result(t: Timer): { text: string; level: 'ok' | 'bad' | 'none' } {
   if (t.running) return { text: 'running', level: 'none' }
-  if (!t.result) return { text: 'never ran', level: 'none' }
+  // systemd only remembers results since boot, and a Persistent= timer has a
+  // "last run" from its stamp file even if the job never ran.
+  if (!t.result) return { text: t.lastRun ? 'no run since boot' : 'never ran', level: 'none' }
   if (t.result === 'success') return { text: 'succeeded', level: 'ok' }
   const why = t.result === 'exit-code' && t.exitStatus != null ? `exit ${t.exitStatus}` : t.result
   return { text: `failed (${why})`, level: 'bad' }

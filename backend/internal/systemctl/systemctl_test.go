@@ -1,6 +1,9 @@
 package systemctl
 
 import (
+	"context"
+
+	"dashiboardie/internal/execx"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -102,5 +105,15 @@ func TestGeneratedServices(t *testing.T) {
 	}
 	if !reflect.DeepEqual(units, want) {
 		t.Fatalf("got %+v, want %+v", units, want)
+	}
+}
+
+func TestJournalNoEntries(t *testing.T) {
+	f := &execx.Fake{Responses: map[string]string{
+		"journalctl --no-pager -o short-iso -n 5 -u nix-gc.service": "-- No entries --\n",
+	}}
+	lines, err := (&Client{Run: f}).Journal(context.Background(), "nix-gc.service", 5)
+	if err != nil || len(lines) != 0 {
+		t.Fatalf("got %q, %v", lines, err)
 	}
 }

@@ -95,7 +95,7 @@ For UI work, run the backend with `-mock` and `npm run dev` side by side.
   - `GET /api/units` returns `{failed, timers}`. `GET /api/units/{unit}/logs[/follow]` only allows units that are failed right now, the configured timers, and the services they trigger.
 - **Units overview** (`backend/internal/units`): host-wide systemd state that isn't a service row.
   - All failed units come from `systemctl list-units --state=failed -o json`. This is cheap because it only walks loaded units, unlike `list-unit-files`.
-  - The timers come from `-systemd-timers` (`services.dashiboardie.systemdTimers`). Each shows the timer's `LastTriggerUSec`/`NextElapseUSecRealtime` plus the triggered service's `Result`/`ExecMainStatus`. A result is only reported once the service has run, because systemd says `success` for a service that never ran.
+  - The timers come from `-systemd-timers` (`services.dashiboardie.systemdTimers`). Each shows the timer's `LastTriggerUSec`/`NextElapseUSecRealtime` plus the triggered service's `Result`/`ExecMainStatus`. A result is only reported when the service started this boot (`ExecMainStartTimestamp`) or failed. systemd says `success` for a service that never ran, and a `Persistent=` timer reports a last run from its stamp file even if the job never ran: the stamp is created when the timer first appears.
 - **No authentication, by design:** access is enforced by the reverse proxy. Don't add auth.
 - **Metrics are optional:** a nil `Metrics` (or a nil field inside it) means the source can't provide them, and the UI shows `—`.
 - **Host resources** (`backend/internal/host`, `GET /api/host`): the overview at the top of the page. It's independent of the providers and shows real data even with `-mock`.
