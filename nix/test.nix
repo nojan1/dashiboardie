@@ -118,6 +118,13 @@ pkgs.testers.runNixOSTest {
 
     with subtest("serves the frontend"):
         machine.succeed("curl -sf http://127.0.0.1:8080/ | grep -q '<title>Dashiboardie</title>'")
+        # Nix store files have a 1970 mtime; index.html must be revalidated by
+        # content (ETag), not by Last-Modified, or browsers keep old versions.
+        headers = machine.succeed("curl -sfI http://127.0.0.1:8080/").lower()
+        assert "cache-control: no-cache" in headers, headers
+        assert "etag:" in headers and "last-modified" not in headers, headers
+        asset = machine.succeed("curl -sf http://127.0.0.1:8080/ | grep -o '/assets/[^\"]*\\.js' | head -1").strip()
+        assert "immutable" in machine.succeed(f"curl -sfI http://127.0.0.1:8080{asset}").lower(), asset
 
     with subtest("restart changes the unit's main PID"):
         before = machine.succeed("systemctl show -p MainPID --value hello").strip()

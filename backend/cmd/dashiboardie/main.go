@@ -18,6 +18,7 @@ import (
 	"dashiboardie/internal/providers/systemd"
 	"dashiboardie/internal/service"
 	"dashiboardie/internal/systemctl"
+	"dashiboardie/internal/web"
 )
 
 func main() {
@@ -39,7 +40,7 @@ func main() {
 	// Host stats are always real, even with -mock.
 	api.New(service.NewRegistry(providers...), &host.Reader{}).Register(mux)
 	if *static != "" {
-		mux.Handle("/", http.FileServer(http.Dir(*static)))
+		mux.Handle("/", web.Handler(*static))
 	}
 
 	slog.Info("listening", "addr", *addr, "mock", *useMock)
