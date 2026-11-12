@@ -23,6 +23,8 @@ with duct tape. **dashiboardie** puts the whole spread on a single plate.
   waiting get an **↑ update** badge.
 - ⏰ **Timers.** Did the nightly backup actually run? When's the next one? Did
   it fail? Now you know.
+- 💤 **Wake-on-LAN.** Rise and shine! Wake up the NAS or the gaming PC from a
+  tucked-away section at the bottom of the page.
 - 🔗 **Links to everything.** Jump straight to a service's web UI, picked up
   from Traefik labels, published ports or your own config.
 - 🌗 **Easy on the eyes.** Nord-flavoured, light and dark, and works fine
@@ -46,6 +48,7 @@ dashiboardie is a NixOS-first kind of dish. Add the flake, flip it on:
             systemdUnits = [ "nginx" "postgresql" ];
             systemdUnitUrls.nginx = "https://nginx.example.com";
             systemdTimers = [ "nix-gc" "restic-backups-daily" ];
+            wakeOnLan.nas = "aa:bb:cc:dd:ee:ff";
           };
         }
       ];

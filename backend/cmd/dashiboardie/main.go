@@ -23,6 +23,7 @@ import (
 	"dashiboardie/internal/systemctl"
 	"dashiboardie/internal/units"
 	"dashiboardie/internal/web"
+	"dashiboardie/internal/wol"
 )
 
 func main() {
@@ -33,7 +34,15 @@ func main() {
 	nixosDir := flag.String("nixos-containers-dir", nixos.DefaultConfigDir, "directory with NixOS container configs")
 	timers := flag.String("systemd-timers", "", "comma-separated systemd timers to show with their last and next run: backup,nix-gc")
 	updateEvery := flag.Duration("update-check-interval", 6*time.Hour, "how often to check registries for newer podman images (podman auto-update --dry-run); 0 disables")
+	wolList := flag.String("wol-hosts", "", "comma-separated hosts to offer Wake-on-LAN for, as name=mac or name=mac@broadcast[:port]: nas=aa:bb:cc:dd:ee:ff@192.168.1.255")
 	flag.Parse()
+
+	wolHosts, err := wol.Parse(splitList(*wolList))
+	if err != nil {
+		slog.Error("bad -wol-hosts", "err", err)
+		os.Exit(2)
+	}
+	waker := wol.New(wolHosts)
 
 	ctx := context.Background()
 	var providers []service.Provider
@@ -41,6 +50,9 @@ func main() {
 	if *useMock {
 		providers = mock.All()
 		unitSource = mock.Units{}
+		if len(wolHosts) == 0 {
+			waker = mock.Waker()
+		}
 	} else {
 		providers = realProviders(ctx, splitList(*unitList), *nixosDir, *updateEvery)
 		unitSource = units.New(&systemctl.Client{Run: execx.Exec{}}, splitList(*timers))
@@ -52,7 +64,7 @@ func main() {
 	hostReader.Start(ctx, 10*time.Second, 360)
 
 	mux := http.NewServeMux()
-	api.New(service.NewRegistry(providers...), hostReader, unitSource).Register(mux)
+	api.New(service.NewRegistry(providers...), hostReader, unitSource, waker).Register(mux)
 	if *static != "" {
 		mux.Handle("/", web.Handler(*static))
 	}

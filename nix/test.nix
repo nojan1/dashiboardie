@@ -30,6 +30,7 @@ pkgs.testers.runNixOSTest {
         "tick"
         "missing"
       ];
+      wakeOnLan.nas = "02:00:00:00:00:01@127.0.0.1:40009";
     };
 
     systemd.services.tick = {
@@ -72,6 +73,7 @@ pkgs.testers.runNixOSTest {
     environment.systemPackages = [
       pkgs.curl
       pkgs.jq
+      pkgs.socat
     ];
   };
 
@@ -158,6 +160,20 @@ pkgs.testers.runNixOSTest {
         assert code == "404", code
         # The journalctl started for the stream must be gone again.
         machine.fail("pgrep -f 'journalctl.*-f -u hello.service'")
+
+    with subtest("wake-on-lan sends a magic packet to configured hosts only"):
+        machine.succeed("systemd-run --unit wolcap socat -u UDP-RECV:40009 CREATE:/tmp/wol.bin")
+        machine.wait_until_succeeds("ss -uln | grep -q ':40009'")
+        hosts = json.loads(machine.succeed("curl -sf http://127.0.0.1:8080/api/wol"))["hosts"]
+        assert [h["name"] for h in hosts] == ["nas"], hosts
+        machine.succeed("curl -sf -X POST http://127.0.0.1:8080/api/wol/nas")
+        machine.wait_until_succeeds("test $(stat -c %s /tmp/wol.bin) -ge 102")
+        head = machine.succeed("head -c 12 /tmp/wol.bin | od -An -tx1").split()
+        assert head == ["ff"] * 6 + ["02", "00", "00", "00", "00", "01"], head
+        code = machine.succeed(
+            "curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/api/wol/other"
+        )
+        assert code == "404", code
 
     with subtest("listing is fast"):
         # Regression: list-unit-files made this take >10s on small VMs.

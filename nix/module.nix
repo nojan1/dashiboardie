@@ -15,6 +15,8 @@ let
   unitSpecs = map (u: if cfg.systemdUnitUrls ? ${u} then "${u}=${cfg.systemdUnitUrls.${u}}" else u) (
     lib.unique (cfg.systemdUnits ++ lib.attrNames cfg.systemdUnitUrls)
   );
+
+  wolSpecs = lib.mapAttrsToList (name: target: "${name}=${target}") cfg.wakeOnLan;
 in
 {
   options.services.dashiboardie = {
@@ -88,6 +90,21 @@ in
       '';
     };
 
+    wakeOnLan = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = {
+        nas = "aa:bb:cc:dd:ee:ff";
+        desktop = "11:22:33:44:55:66@192.168.1.255";
+      };
+      description = ''
+        Hosts that can be woken with a Wake-on-LAN magic packet from a
+        collapsed section of the dashboard. Each value is a MAC address,
+        optionally followed by `@address[:port]` to send to a specific
+        broadcast address instead of 255.255.255.255:9.
+      '';
+    };
+
     podman = lib.mkOption {
       type = lib.types.bool;
       default = config.virtualisation.podman.enable;
@@ -114,6 +131,12 @@ in
       {
         assertion = lib.all (s: !(lib.hasInfix "," s)) (unitSpecs ++ cfg.systemdTimers);
         message = "services.dashiboardie: systemd unit and timer names and URLs must not contain commas.";
+      }
+      {
+        assertion =
+          lib.all (n: !(lib.hasInfix "," n) && !(lib.hasInfix "=" n)) (lib.attrNames cfg.wakeOnLan)
+          && lib.all (t: !(lib.hasInfix "," t)) (lib.attrValues cfg.wakeOnLan);
+        message = "services.dashiboardie.wakeOnLan: host names must not contain commas or \"=\", and addresses no commas.";
       }
     ];
 
@@ -143,6 +166,10 @@ in
           ++ lib.optionals (cfg.systemdTimers != [ ]) [
             "-systemd-timers"
             (lib.concatStringsSep "," cfg.systemdTimers)
+          ]
+          ++ lib.optionals (wolSpecs != [ ]) [
+            "-wol-hosts"
+            (lib.concatStringsSep "," wolSpecs)
           ]
           ++ [
             "-update-check-interval"

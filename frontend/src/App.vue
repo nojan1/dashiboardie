@@ -19,6 +19,7 @@ import FailedUnits from './components/FailedUnits.vue'
 import HostSummary from './components/HostSummary.vue'
 import LogsModal from './components/LogsModal.vue'
 import TimersTable from './components/TimersTable.vue'
+import WakeOnLan from './components/WakeOnLan.vue'
 
 const REFRESH_MS = 10_000
 
@@ -286,6 +287,8 @@ onUnmounted(() => {
     </div>
 
     <TimersTable v-if="units?.timers.length" :timers="units.timers" :now="now" @logs="showUnitLogs" />
+
+    <WakeOnLan />
 
     <LogsModal v-if="logTarget" :target="logTarget" @close="closeLogs" />
   </main>

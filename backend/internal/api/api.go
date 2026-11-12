@@ -12,16 +12,18 @@ import (
 	"dashiboardie/internal/host"
 	"dashiboardie/internal/service"
 	"dashiboardie/internal/units"
+	"dashiboardie/internal/wol"
 )
 
 type Server struct {
 	reg   *service.Registry
 	host  *host.Reader
 	units units.Source
+	wol   *wol.Waker
 }
 
-func New(reg *service.Registry, hostReader *host.Reader, u units.Source) *Server {
-	return &Server{reg: reg, host: hostReader, units: u}
+func New(reg *service.Registry, hostReader *host.Reader, u units.Source, w *wol.Waker) *Server {
+	return &Server{reg: reg, host: hostReader, units: u, wol: w}
 }
 
 // Register mounts the API routes on mux.
@@ -34,6 +36,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/units", s.unitsOverview)
 	mux.HandleFunc("GET /api/units/{unit}/logs", s.unitLogs)
 	mux.HandleFunc("GET /api/units/{unit}/logs/follow", s.followUnitLogs)
+	mux.HandleFunc("GET /api/wol", s.wolHosts)
+	mux.HandleFunc("POST /api/wol/{name}", s.wake)
 }
 
 func (s *Server) hostStats(w http.ResponseWriter, r *http.Request) {

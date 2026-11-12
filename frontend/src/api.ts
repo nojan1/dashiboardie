@@ -138,3 +138,15 @@ export interface UnitsOverview {
 }
 
 export const fetchUnits = () => request<UnitsOverview>('/api/units')
+
+// Mirrors backend/internal/wol. Hosts are woken by name only.
+export interface WolHost {
+  name: string
+  mac: string
+  target: string
+}
+
+export const fetchWolHosts = () => request<{ hosts: WolHost[] }>('/api/wol')
+
+export const wakeHost = (name: string) =>
+  request<void>(`/api/wol/${encodeURIComponent(name)}`, { method: 'POST' })
