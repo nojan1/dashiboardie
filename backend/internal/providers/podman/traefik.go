@@ -80,16 +80,17 @@ func routerUsesTLS(labels map[string]string, router string) bool {
 	return false
 }
 
-// quadletLabels reads the Label= entries from the [X-Container] section that
+// quadletLabels reads the Label= and PublishPort= entries from the [X-Container] section that
 // Quadlet copies into the generated unit. This works while the Quadlet is
 // stopped (and its container removed), unlike `podman ps`.
-func quadletLabels(unitPath string) (map[string]string, error) {
+func quadletLabels(unitPath string) (map[string]string, []string, error) {
 	f, err := os.Open(unitPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 	labels := map[string]string{}
+	var publish []string
 	inContainer := false
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -99,6 +100,10 @@ func quadletLabels(unitPath string) (map[string]string, error) {
 			continue
 		}
 		if !inContainer {
+			continue
+		}
+		if p, ok := strings.CutPrefix(line, "PublishPort="); ok {
+			publish = append(publish, p)
 			continue
 		}
 		v, ok := strings.CutPrefix(line, "Label=")
@@ -111,7 +116,7 @@ func quadletLabels(unitPath string) (map[string]string, error) {
 			}
 		}
 	}
-	return labels, sc.Err()
+	return labels, publish, sc.Err()
 }
 
 // splitLabelValue handles both forms Quadlet accepts:

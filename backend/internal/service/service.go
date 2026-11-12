@@ -62,6 +62,9 @@ type Service struct {
 	URL string `json:"url,omitempty"`
 	// Address is the service's primary IP, shown as text (incus instances).
 	Address string `json:"address,omitempty"`
+	// Ports are published TCP host ports, offered as links on the dashboard's
+	// own host when there is no URL (podman containers and Quadlets).
+	Ports []int `json:"ports,omitempty"`
 	// StartedAt is when the service last started; set only while running.
 	StartedAt *time.Time `json:"startedAt,omitempty"`
 	// Restarts counts automatic restarts (systemd NRestarts, podman's

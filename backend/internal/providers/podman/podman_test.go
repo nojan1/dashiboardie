@@ -29,7 +29,8 @@ const psOutput = `[
   {"Id": "bbb", "Names": ["openwebui_openwebui_1"], "State": "exited", "IsInfra": false,
    "Labels": {"PODMAN_SYSTEMD_UNIT": "podman-compose@openwebui.service"}},
   {"Id": "ccc", "Names": ["redis"], "State": "running", "IsInfra": false, "Labels": null,
-   "StartedAt": 1786213497, "Restarts": 2},
+   "StartedAt": 1786213497, "Restarts": 2,
+   "Ports": [{"host_ip": "", "container_port": 6379, "host_port": 6379, "range": 1, "protocol": "tcp"}]},
   {"Id": "ddd", "Names": ["efe340b616bc-infra"], "State": "running", "IsInfra": true, "Labels": {}}
 ]`
 
@@ -54,7 +55,7 @@ func newProvider(t *testing.T, f *execx.Fake) *Provider {
 	t.Helper()
 	gen := t.TempDir()
 	files := map[string]string{
-		"jellyfin.service":        "[Unit]\nSourcePath=/home/u/.config/containers/systemd/jellyfin.container\n",
+		"jellyfin.service":        "[Unit]\nSourcePath=/home/u/.config/containers/systemd/jellyfin.container\n[X-Container]\nPublishPort=8096:8096\nPublishPort=127.0.0.1:8920:8920\n",
 		"other-generated.service": "[Unit]\nSourcePath=/etc/fstab\n",
 	}
 	for name, content := range files {
@@ -81,6 +82,9 @@ func TestList(t *testing.T) {
 	if !ok || q.Status != service.StatusRunning || q.Metrics == nil || *q.Metrics.MemoryBytes != 536870912 {
 		t.Errorf("quadlet: %+v", q)
 	}
+	if len(q.Ports) != 1 || q.Ports[0] != 8096 {
+		t.Errorf("quadlet ports: %v", q.Ports)
+	}
 	if _, ok := byID["podman/systemd-jellyfin"]; ok {
 		t.Error("quadlet's container should be hidden from the podman list")
 	}
@@ -90,6 +94,9 @@ func TestList(t *testing.T) {
 	r := byID["podman/redis"]
 	if r.Metrics == nil || *r.Metrics.MemoryBytes != 17391616 {
 		t.Errorf("redis metrics: %+v", r.Metrics)
+	}
+	if len(r.Ports) != 1 || r.Ports[0] != 6379 {
+		t.Errorf("redis ports: %v", r.Ports)
 	}
 	if r.StartedAt == nil || r.StartedAt.Unix() != 1786213497 || r.Restarts == nil || *r.Restarts != 2 {
 		t.Errorf("redis uptime: %v %v", r.StartedAt, r.Restarts)

@@ -37,7 +37,7 @@ func All() []service.Provider {
 			service.Service{ID: "jellyfin", Name: "jellyfin", Status: service.StatusRunning, Unit: "jellyfin.service", Metrics: metrics(3.2, 512), URL: "https://jellyfin.example.com", StartedAt: ago(26 * time.Hour), Restarts: ptr(0), UpdateAvailable: true},
 		),
 		newProvider(service.SourcePodman,
-			service.Service{ID: "redis", Name: "redis", Status: service.StatusRunning, Metrics: metrics(0.4, 24), StartedAt: ago(9 * 24 * time.Hour), Restarts: ptr(0)},
+			service.Service{ID: "redis", Name: "redis", Status: service.StatusRunning, Metrics: metrics(0.4, 24), Ports: []int{8081, 6379}, StartedAt: ago(9 * 24 * time.Hour), Restarts: ptr(0)},
 			service.Service{ID: "bazarr", Name: "bazarr", Status: service.StatusRunning, Metrics: metrics(1.1, 180), URL: "http://bazarr.home", StartedAt: ago(14 * time.Minute), Restarts: ptr(4)},
 		),
 		newProvider(service.SourceIncus,

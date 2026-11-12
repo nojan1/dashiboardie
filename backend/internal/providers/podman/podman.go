@@ -70,14 +70,18 @@ func (p *Provider) quadlets(ctx context.Context) ([]service.Service, error) {
 	}
 	var names []string
 	urls := map[string]string{}
+	ports := map[string][]int{}
 	for _, g := range generated {
 		if !isQuadletSource(g.SourcePath) {
 			continue
 		}
 		names = append(names, g.Name)
 		// Links are best effort: an unreadable unit just gets no URL.
-		if labels, err := quadletLabels(g.Path); err == nil {
+		if labels, publish, err := quadletLabels(g.Path); err == nil {
 			urls[g.Name] = traefikURL(labels)
+			if urls[g.Name] == "" {
+				ports[g.Name] = publishPorts(publish)
+			}
 		}
 	}
 	units, err := p.sc.Show(ctx, names...)
@@ -95,6 +99,7 @@ func (p *Provider) quadlets(ctx context.Context) ([]service.Service, error) {
 			Metrics:         p.sc.Metrics(u),
 			Unit:            u.ID,
 			URL:             urls[u.ID],
+			Ports:           ports[u.ID],
 			UpdateAvailable: updates.units[u.ID],
 		}
 		s.StartedAt, s.Restarts = u.Uptime()
@@ -121,6 +126,7 @@ type psEntry struct {
 	Labels    map[string]string `json:"Labels"`
 	StartedAt int64             `json:"StartedAt"` // unix seconds
 	Restarts  *int              `json:"Restarts"`
+	Ports     []psPort          `json:"Ports"`
 }
 
 // statsEntry is `podman stats --format '{{json .ContainerStats}}'`, which
@@ -163,6 +169,9 @@ func (p *Provider) containers(ctx context.Context, quadlets []service.Service, w
 			URL:             traefikURL(e.Labels),
 			Restarts:        e.Restarts,
 			UpdateAvailable: updates.containers[e.Names[0]],
+		}
+		if s.URL == "" {
+			s.Ports = psPorts(e.Ports)
 		}
 		if s.Status == service.StatusRunning {
 			anyRunning = true

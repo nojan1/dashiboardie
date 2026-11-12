@@ -91,7 +91,7 @@ func TestQuadletLabels(t *testing.T) {
 	if err := os.WriteFile(path, []byte(unit), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	labels, err := quadletLabels(path)
+	labels, _, err := quadletLabels(path)
 	if err != nil {
 		t.Fatal(err)
 	}

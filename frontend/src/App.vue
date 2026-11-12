@@ -53,6 +53,10 @@ function safeUrl(url?: string) {
   }
 }
 
+// A published port is assumed to serve http on the host the dashboard was
+// opened on (location.hostname keeps IPv6 brackets).
+const portUrl = (port: number) => `http://${location.hostname}:${port}/`
+
 // "https://jellyfin.example.com/" -> "jellyfin.example.com"
 const displayUrl = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '')
 
@@ -239,6 +243,16 @@ onUnmounted(() => {
               <a v-if="safeUrl(s.url)" :href="safeUrl(s.url)" target="_blank" rel="noopener noreferrer">
                 {{ displayUrl(s.url!) }}<span class="ext" aria-hidden="true">↗</span>
               </a>
+              <span v-else-if="s.ports?.length" class="ports">
+                <a
+                  v-for="p in s.ports"
+                  :key="p"
+                  :href="portUrl(p)"
+                  :aria-label="`Port ${p}`"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >:{{ p }}<span class="ext" aria-hidden="true">↗</span></a>
+              </span>
               <span v-else-if="s.address" class="ip">{{ s.address }}</span>
               <span v-else class="none">—</span>
             </td>
@@ -337,6 +351,7 @@ tr.selected td { background: color-mix(in srgb, var(--accent) 8%, transparent); 
 .address a:hover { text-decoration: underline; }
 .address .ext { margin-left: 0.25em; font-size: 0.8em; }
 .address .ip { font: 13px var(--mono); }
+.address .ports { display: inline-flex; flex-wrap: wrap; gap: 0 0.6em; font: 13px var(--mono); }
 .address .none { color: var(--muted); }
 .status::before {
   content: '';

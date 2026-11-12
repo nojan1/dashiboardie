@@ -17,6 +17,8 @@ export interface Service {
   unit?: string
   url?: string
   address?: string
+  // Published TCP host ports, linked on the dashboard's own host when there is no url.
+  ports?: number[]
   startedAt?: string // RFC 3339; only while running
   restarts?: number
   updateAvailable?: boolean
